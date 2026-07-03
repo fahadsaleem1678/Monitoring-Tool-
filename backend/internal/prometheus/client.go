@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -55,6 +56,65 @@ func (c *Client) InstantQuery(ctx context.Context, query string) (json.RawMessag
 	return response.Data, nil
 }
 
+func (c *Client) RangeQuery(ctx context.Context, query string, start, end time.Time, step time.Duration) (json.RawMessage, error) {
+	params := url.Values{
+		"query": []string{query},
+		"start": []string{formatUnixTime(start)},
+		"end":   []string{formatUnixTime(end)},
+		"step":  []string{formatDurationSeconds(step)},
+	}
+
+	var response queryEnvelope
+	if err := c.get(ctx, "/api/v1/query_range", params, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" {
+		return nil, fmt.Errorf("prometheus returned status %q", response.Status)
+	}
+	return response.Data, nil
+}
+
+func (c *Client) Labels(ctx context.Context) (json.RawMessage, error) {
+	var response queryEnvelope
+	if err := c.get(ctx, "/api/v1/labels", nil, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" {
+		return nil, fmt.Errorf("prometheus returned status %q", response.Status)
+	}
+	return response.Data, nil
+}
+
+func (c *Client) LabelValues(ctx context.Context, label string) (json.RawMessage, error) {
+	var response queryEnvelope
+	if err := c.get(ctx, "/api/v1/label/"+url.PathEscape(label)+"/values", nil, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" {
+		return nil, fmt.Errorf("prometheus returned status %q", response.Status)
+	}
+	return response.Data, nil
+}
+
+func (c *Client) Series(ctx context.Context, matches []string, start, end time.Time) (json.RawMessage, error) {
+	params := url.Values{
+		"start": []string{formatUnixTime(start)},
+		"end":   []string{formatUnixTime(end)},
+	}
+	for _, match := range matches {
+		params.Add("match[]", match)
+	}
+
+	var response queryEnvelope
+	if err := c.get(ctx, "/api/v1/series", params, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" {
+		return nil, fmt.Errorf("prometheus returned status %q", response.Status)
+	}
+	return response.Data, nil
+}
+
 func (c *Client) get(ctx context.Context, path string, params url.Values, target any) error {
 	if c.baseURL == "" {
 		return fmt.Errorf("PROMETHEUS_URL is not configured")
@@ -95,4 +155,12 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, target
 type queryEnvelope struct {
 	Status string          `json:"status"`
 	Data   json.RawMessage `json:"data"`
+}
+
+func formatUnixTime(value time.Time) string {
+	return strconv.FormatFloat(float64(value.UnixMilli())/1000, 'f', 3, 64)
+}
+
+func formatDurationSeconds(value time.Duration) string {
+	return strconv.FormatFloat(value.Seconds(), 'f', 0, 64)
 }

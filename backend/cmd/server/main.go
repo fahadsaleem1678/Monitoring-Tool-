@@ -12,6 +12,7 @@ import (
 
 	"monitoring-tool/backend/internal/config"
 	"monitoring-tool/backend/internal/health"
+	"monitoring-tool/backend/internal/httpapi"
 	promclient "monitoring-tool/backend/internal/prometheus"
 )
 
@@ -21,12 +22,18 @@ func main() {
 
 	prom := promclient.New(cfg.PrometheusURL, cfg.PrometheusTimeout)
 	healthHandler := health.NewHandler(cfg, prom)
+	metricsHandler := httpapi.NewMetricsHandler(prom)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler.Healthz)
 	mux.HandleFunc("GET /readyz", healthHandler.Readyz)
 	mux.HandleFunc("GET /api/v1/health", healthHandler.Healthz)
 	mux.HandleFunc("GET /api/v1/metrics/prometheus-smoke", prometheusSmokeHandler(prom, cfg.PrometheusSmokeQuery))
+	mux.HandleFunc("GET /api/v1/metrics/query", metricsHandler.Query)
+	mux.HandleFunc("GET /api/v1/metrics/query-range", metricsHandler.QueryRange)
+	mux.HandleFunc("GET /api/v1/metrics/labels", metricsHandler.Labels)
+	mux.HandleFunc("GET /api/v1/metrics/label-values", metricsHandler.LabelValues)
+	mux.HandleFunc("GET /api/v1/metrics/series", metricsHandler.Series)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

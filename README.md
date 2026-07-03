@@ -5,12 +5,17 @@ Phase 0 establishes the project foundation and verifies connectivity.
 
 ## Current Phase
 
-Phase 0 only:
+Phase 1:
 
 - Go backend skeleton.
 - Health and readiness endpoints.
 - Prometheus smoke query endpoint.
+- Validated Prometheus instant query endpoint.
+- Validated Prometheus range query endpoint.
+- Metrics labels, label values, and series endpoints.
 - React + Vite frontend skeleton.
+- Kubernetes overview with hardcoded Phase 1 panels.
+- PromQL instant query workbench.
 - Docker Compose PostgreSQL for local development.
 - Migration folder placeholder.
 
@@ -68,6 +73,19 @@ Prometheus smoke CLI:
 go run ./cmd/prom-smoke up
 ```
 
+Phase 1 metrics endpoints:
+
+```powershell
+curl "http://localhost:8080/api/v1/metrics/query?query=sum(up)"
+
+$end = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$start = $end - 600
+curl "http://localhost:8080/api/v1/metrics/query-range?query=sum(up)&start=$start&end=$end&step=60"
+
+curl "http://localhost:8080/api/v1/metrics/labels"
+curl "http://localhost:8080/api/v1/metrics/label-values?label=namespace"
+```
+
 ## Start Frontend
 
 ```powershell
@@ -92,6 +110,14 @@ The page should show backend health through the Vite proxy.
 - `/readyz` can reach Prometheus.
 - `/api/v1/metrics/prometheus-smoke` returns sample Prometheus JSON.
 - Frontend starts locally and displays backend health.
+
+## Phase 1 Success Criteria
+
+- Backend instant and range query endpoints return real Prometheus data.
+- Query validation rejects missing queries and overly dense range requests.
+- Frontend overview loads real cluster summary data through the Go backend.
+- Charts render range data from Prometheus through backend polling.
+- Query failures are shown in the UI.
 
 ## Project Structure
 
