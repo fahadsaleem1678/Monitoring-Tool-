@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monitoring Tool Roadmap</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #171d24;
+      --panel-2: #1f2730;
+      --text: #eef3f8;
+      --muted: #a9b5c2;
+      --line: #344150;
+      --green: #35c486;
+      --blue: #5aa9ff;
+      --yellow: #f4c95d;
+      --red: #ff6b6b;
+      --violet: #a78bfa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      padding: 34px 44px 22px;
+      border-bottom: 1px solid var(--line);
+      background: #121820;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      margin: 0;
+      max-width: 920px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    main {
+      padding: 28px 44px 44px;
+      display: grid;
+      gap: 28px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 24px;
+    }
+    h2 {
+      margin: 0 0 18px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    .architecture {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(150px, 1fr));
+      gap: 14px;
+      align-items: stretch;
+    }
+    .box {
+      min-height: 132px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 8px;
+      padding: 16px;
+      position: relative;
+    }
+    .box h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+    .box p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .tag {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #07100c;
+      background: var(--green);
+    }
+    .tag.blue { background: var(--blue); color: #06101c; }
+    .tag.yellow { background: var(--yellow); color: #171204; }
+    .tag.red { background: var(--red); color: #190606; }
+    .tag.violet { background: var(--violet); color: #11091f; }
+    .arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-weight: 800;
+      font-size: 22px;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 36px 1fr 36px 1fr 36px 1fr 36px 1fr;
+      gap: 0;
+      align-items: center;
+    }
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(120px, 1fr));
+      gap: 12px;
+    }
+    .phase {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 190px;
+    }
+    .phase strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 15px;
+    }
+    .phase span {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .phase ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .phase li { margin-bottom: 5px; }
+    .columns {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+    .note {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 12px 0 0;
+    }
+    @media (max-width: 1100px) {
+      .flow, .timeline, .columns {
+        grid-template-columns: 1fr;
+      }
+      .arrow { transform: rotate(90deg); min-height: 34px; }
+    }
+    @media (max-width: 700px) {
+      header, main { padding-left: 18px; padding-right: 18px; }
+      h1 { font-size: 26px; }
+      section { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Self-Hosted Kubernetes Monitoring Tool</h1>
+    <p class="subtitle">A Go + React observability platform that uses Prometheus as the metrics source of truth, adds dashboards, auth, live updates, and alerting, then deploys into the AlmaLinux K3s cluster.</p>
+  </header>
+  <main>
+    <section>
+      <h2>Architecture Flow</h2>
+      <div class="flow">
+        <div class="box">
+          <span class="tag">K3s</span>
+          <h3>Cluster Workloads</h3>
+          <p>Nodes, pods, kubelet, cAdvisor, node exporter, and kube-state-metrics expose metrics.</p>
+        </div>
+        <div class="arrow">-&gt;</div>
+        <div class="box">
+          <span class="tag blue">Prometheus</span>
+          <h3>Metrics Store</h3>
+          <p>Scrapes and stores time-series data. Remains the only raw metrics database in v1.</p>
+        </div>
+        <div class="arrow">-&gt;</div>
+        <div class="box">
+          <span class="tag yellow">Go</span>
+          <h3>Backend API</h3>
+          <p>Auth, PromQL proxy, dashboard APIs, alert APIs, WebSocket live updates, and health checks.</p>
+        </div>
+        <div class="arrow">-&gt;</div>
+        <div class="box">
+          <span class="tag red">Postgres</span>
+          <h3>App Database</h3>
+          <p>Stores users, dashboards, panels, alert rules, notification channels, and alert history.</p>
+        </div>
+        <div class="arrow">-&gt;</div>
+        <div class="box">
+          <span class="tag violet">React</span>
+          <h3>Frontend</h3>
+          <p>Operator UI for dashboards, charts, PromQL editing, alerts, and cluster overview.</p>
+        </div>
+      </div>
+      <p class="note">Key rule: the backend stores product data, not raw time-series metrics.</p>
+    </section>
+
+    <section>
+      <h2>Phased Roadmap</h2>
+      <div class="timeline">
+        <div class="phase">
+          <strong>Phase 0</strong>
+          <span>Foundation</span>
+          <ul>
+            <li>Confirm Prometheus access</li>
+            <li>Scaffold Go and React</li>
+            <li>Add Postgres locally</li>
+            <li>Add health checks</li>
+          </ul>
+        </div>
+        <div class="phase">
+          <strong>Phase 1</strong>
+          <span>Read-only MVP</span>
+          <ul>
+            <li>PromQL API proxy</li>
+            <li>Range query charts</li>
+            <li>Hardcoded cluster dashboard</li>
+            <li>Polling refresh</li>
+          </ul>
+        </div>
+        <div class="phase">
+          <strong>Phase 2</strong>
+          <span>Product MVP</span>
+          <ul>
+            <li>Login and roles</li>
+            <li>Dashboard CRUD</li>
+            <li>Panel editor</li>
+            <li>PromQL autocomplete</li>
+          </ul>
+        </div>
+        <div class="phase">
+          <strong>Phase 3</strong>
+          <span>Live Updates</span>
+          <ul>
+            <li>WebSocket hub</li>
+            <li>Panel subscriptions</li>
+            <li>Query deduplication</li>
+            <li>Reconnect fallback</li>
+          </ul>
+        </div>
+        <div class="phase">
+          <strong>Phase 4</strong>
+          <span>Alerting</span>
+          <ul>
+            <li>Rules UI</li>
+            <li>Alert state</li>
+            <li>Email or webhook</li>
+            <li>History page</li>
+          </ul>
+        </div>
+        <div class="phase">
+          <strong>Phase 5</strong>
+          <span>K3s Deploy</span>
+          <ul>
+            <li>Docker images</li>
+            <li>Kubernetes manifests</li>
+            <li>Secrets and ingress</li>
+            <li>Resource limits</li>
+          </ul>
+        </div>
+        <div class="phase">
+          <strong>Phase 6</strong>
+          <span>Demo Polish</span>
+          <ul>
+            <li>Templates</li>
+            <li>Import/export</li>
+            <li>Docs</li>
+            <li>Manager demo script</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Workstreams</h2>
+      <div class="columns">
+        <div class="box">
+          <span class="tag yellow">Backend</span>
+          <h3>Go Services</h3>
+          <p>Prometheus client, API handlers, auth, database access, alerting, live update hub, Kubernetes readiness.</p>
+        </div>
+        <div class="box">
+          <span class="tag violet">Frontend</span>
+          <h3>React App</h3>
+          <p>Application shell, dashboards, chart components, panel editor, query editor, alerts, and settings.</p>
+        </div>
+        <div class="box">
+          <span class="tag blue">Deployment</span>
+          <h3>K3s Runtime</h3>
+          <p>Container images, manifests, ConfigMaps, Secrets, Ingress, resource limits, and deployment docs.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,22 @@
+name: monitoring-tool
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: monitoring-tool-postgres
+    environment:
+      POSTGRES_DB: monitoring
+      POSTGRES_USER: monitoring
+      POSTGRES_PASSWORD: monitoring
+    ports:
+      - "5432:5432"
+    volumes:
+      - monitoring_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitoring -d monitoring"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  monitoring_postgres_data:
