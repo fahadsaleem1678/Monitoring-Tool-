@@ -10,30 +10,67 @@ import (
 	"syscall"
 	"time"
 
+	"monitoring-tool/backend/internal/auth"
 	"monitoring-tool/backend/internal/config"
 	"monitoring-tool/backend/internal/health"
 	"monitoring-tool/backend/internal/httpapi"
 	promclient "monitoring-tool/backend/internal/prometheus"
+	"monitoring-tool/backend/internal/store"
 )
 
 func main() {
 	cfg := config.Load()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 
+	appStore, err := store.Open(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("database connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer appStore.Close()
+
+	if err := appStore.Migrate(context.Background()); err != nil {
+		logger.Error("database migration failed", "error", err)
+		os.Exit(1)
+	}
+	if err := appStore.EnsureAdmin(context.Background(), cfg.AdminUsername, cfg.AdminPassword); err != nil {
+		logger.Error("admin seed failed", "error", err)
+		os.Exit(1)
+	}
+	if err := appStore.EnsureUser(context.Background(), cfg.ViewerUsername, cfg.ViewerPassword, "viewer"); err != nil {
+		logger.Error("viewer seed failed", "error", err)
+		os.Exit(1)
+	}
+
 	prom := promclient.New(cfg.PrometheusURL, cfg.PrometheusTimeout)
+	authService := auth.NewService(cfg.JWTSecret)
 	healthHandler := health.NewHandler(cfg, prom)
+	authHandler := httpapi.NewAuthHandler(appStore, authService)
 	metricsHandler := httpapi.NewMetricsHandler(prom)
+	dashboardHandler := httpapi.NewDashboardHandler(appStore, prom)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler.Healthz)
 	mux.HandleFunc("GET /readyz", healthHandler.Readyz)
 	mux.HandleFunc("GET /api/v1/health", healthHandler.Healthz)
+	mux.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
+	mux.Handle("POST /api/v1/auth/logout", authService.Middleware(http.HandlerFunc(authHandler.Logout)))
+	mux.Handle("GET /api/v1/auth/me", authService.Middleware(http.HandlerFunc(authHandler.Me)))
 	mux.HandleFunc("GET /api/v1/metrics/prometheus-smoke", prometheusSmokeHandler(prom, cfg.PrometheusSmokeQuery))
 	mux.HandleFunc("GET /api/v1/metrics/query", metricsHandler.Query)
 	mux.HandleFunc("GET /api/v1/metrics/query-range", metricsHandler.QueryRange)
 	mux.HandleFunc("GET /api/v1/metrics/labels", metricsHandler.Labels)
 	mux.HandleFunc("GET /api/v1/metrics/label-values", metricsHandler.LabelValues)
 	mux.HandleFunc("GET /api/v1/metrics/series", metricsHandler.Series)
+	mux.Handle("GET /api/v1/dashboards", authService.Middleware(http.HandlerFunc(dashboardHandler.List)))
+	mux.Handle("POST /api/v1/dashboards", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.Create))))
+	mux.Handle("GET /api/v1/dashboards/{id}", authService.Middleware(http.HandlerFunc(dashboardHandler.ByID)))
+	mux.Handle("PUT /api/v1/dashboards/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.Update))))
+	mux.Handle("DELETE /api/v1/dashboards/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.Delete))))
+	mux.Handle("POST /api/v1/dashboards/{id}/panels", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.CreatePanel))))
+	mux.Handle("PUT /api/v1/panels/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.UpdatePanel))))
+	mux.Handle("DELETE /api/v1/panels/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.DeletePanel))))
+	mux.Handle("POST /api/v1/panels/preview", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.PreviewPanel))))
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

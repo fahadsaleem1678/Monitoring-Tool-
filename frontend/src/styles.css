@@ -48,6 +48,44 @@ button {
   border-bottom: 1px solid #2b333d;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #8ea2b8;
+  font-size: 0.86rem;
+}
+
+.topbar-actions button,
+.app-tabs button,
+.compact-form button,
+.panel-form button,
+.login-panel button,
+.danger-button,
+.panel-delete {
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #25303a;
+  color: #f4f7fb;
+  font-weight: 800;
+}
+
+.topbar-actions button:hover,
+.app-tabs button.active,
+.compact-form button,
+.panel-form button,
+.login-panel button {
+  background: #70d6ff;
+  color: #101317;
+}
+
+.app-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: #8ea2b8;
@@ -110,6 +148,177 @@ p {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 20px;
+}
+
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 14px;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  padding: 28px;
+  background: #171c22;
+}
+
+.login-panel h1 {
+  margin-bottom: 8px;
+}
+
+.login-panel label,
+.compact-form label,
+.panel-form label {
+  display: grid;
+  gap: 7px;
+  color: #8ea2b8;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+input,
+textarea {
+  min-width: 0;
+}
+
+input {
+  min-height: 40px;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #f4f7fb;
+  background: #101317;
+}
+
+.dashboards-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.dashboard-sidebar,
+.dashboard-detail {
+  min-width: 0;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  background: #171c22;
+}
+
+.dashboard-sidebar {
+  padding: 16px;
+}
+
+.dashboard-sidebar header,
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.dashboard-sidebar header span {
+  display: inline-flex;
+  min-width: 28px;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #25303a;
+  color: #8ea2b8;
+  font-weight: 800;
+}
+
+.dashboard-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.dashboard-list button {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-height: 62px;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  padding: 10px;
+  color: #d6dde8;
+  background: #101317;
+  text-align: left;
+}
+
+.dashboard-list span {
+  color: #8ea2b8;
+  font-size: 0.78rem;
+}
+
+.compact-form,
+.panel-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.compact-form h3 {
+  margin: 0;
+  color: #f4f7fb;
+  font-size: 0.95rem;
+}
+
+.compact-form textarea {
+  min-height: 72px;
+}
+
+.dashboard-detail {
+  padding: 16px;
+}
+
+.detail-header {
+  margin-bottom: 14px;
+}
+
+.detail-header p {
+  margin: 6px 0 0;
+}
+
+.danger-button,
+.panel-delete {
+  background: #4a2727;
+  color: #f17d73;
+}
+
+.saved-panel-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.saved-panel-wrap .dashboard-panel {
+  height: 100%;
+}
+
+.panel-delete {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 12px;
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 0.75rem;
+}
+
+.panel-form {
+  margin-top: 16px;
+  border-top: 1px solid #2b333d;
+  padding-top: 16px;
+}
+
+.panel-form textarea {
+  min-height: 96px;
 }
 
 .metric-card,
@@ -282,7 +491,8 @@ pre {
 
 @media (max-width: 900px) {
   .summary-strip,
-  .dashboard-grid {
+  .dashboard-grid,
+  .dashboards-layout {
     grid-template-columns: 1fr;
   }
 }
@@ -294,6 +504,7 @@ pre {
   }
 
   .topbar,
+  .topbar-actions,
   .dashboard-panel header,
   .workbench-band header {
     align-items: flex-start;

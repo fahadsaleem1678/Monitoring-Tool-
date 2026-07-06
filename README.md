@@ -5,7 +5,7 @@ Phase 0 establishes the project foundation and verifies connectivity.
 
 ## Current Phase
 
-Phase 1:
+Phase 2:
 
 - Go backend skeleton.
 - Health and readiness endpoints.
@@ -16,8 +16,12 @@ Phase 1:
 - React + Vite frontend skeleton.
 - Kubernetes overview with hardcoded Phase 1 panels.
 - PromQL instant query workbench.
+- Username/password login with JWT.
+- Admin seed user.
+- Saved dashboard and panel APIs.
+- Dashboard list/detail UI with saved PromQL panels.
 - Docker Compose PostgreSQL for local development.
-- Migration folder placeholder.
+- Migration files for app schema.
 
 ## Prerequisites
 
@@ -45,6 +49,13 @@ When Supabase credentials are available, replace `DATABASE_URL` with the
 Supabase PostgreSQL connection string. Do not put service-role API keys in the
 frontend.
 
+Default local login:
+
+```text
+admin / admin123
+viewer / viewer123
+```
+
 ## Start PostgreSQL
 
 ```powershell
@@ -71,6 +82,13 @@ Prometheus smoke CLI:
 
 ```powershell
 go run ./cmd/prom-smoke up
+```
+
+Run database migrations only:
+
+```powershell
+cd "E:\Internship\Monitoring tool"
+.\scripts\migrate-supabase.ps1
 ```
 
 Phase 1 metrics endpoints:
@@ -118,6 +136,15 @@ The page should show backend health through the Vite proxy.
 - Frontend overview loads real cluster summary data through the Go backend.
 - Charts render range data from Prometheus through backend polling.
 - Query failures are shown in the UI.
+
+## Phase 2 Success Criteria
+
+- Admin can log in.
+- Dashboard and panel data persists in PostgreSQL.
+- Admin can create and delete dashboards.
+- Admin can add and delete PromQL panels.
+- Saved panels render real Prometheus data through the backend.
+- Frontend never calls Prometheus or Supabase directly.
 
 ## Project Structure
 
