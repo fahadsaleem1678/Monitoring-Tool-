@@ -14,6 +14,8 @@ import (
 	"monitoring-tool/backend/internal/config"
 	"monitoring-tool/backend/internal/health"
 	"monitoring-tool/backend/internal/httpapi"
+	"monitoring-tool/backend/internal/live"
+	"monitoring-tool/backend/internal/notify"
 	promclient "monitoring-tool/backend/internal/prometheus"
 	"monitoring-tool/backend/internal/store"
 )
@@ -48,6 +50,8 @@ func main() {
 	authHandler := httpapi.NewAuthHandler(appStore, authService)
 	metricsHandler := httpapi.NewMetricsHandler(prom)
 	dashboardHandler := httpapi.NewDashboardHandler(appStore, prom)
+	liveManager := live.NewManager(prom, authService, logger)
+	alertHandler := httpapi.NewAlertHandler(appStore, notify.NewSlackNotifier(cfg.SlackWebhookURL))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler.Healthz)
@@ -71,6 +75,13 @@ func main() {
 	mux.Handle("PUT /api/v1/panels/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.UpdatePanel))))
 	mux.Handle("DELETE /api/v1/panels/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.DeletePanel))))
 	mux.Handle("POST /api/v1/panels/preview", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.PreviewPanel))))
+	mux.Handle("GET /api/v1/alerts/rules", authService.Middleware(http.HandlerFunc(alertHandler.ListRules)))
+	mux.Handle("POST /api/v1/alerts/rules", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(alertHandler.CreateRule))))
+	mux.Handle("PUT /api/v1/alerts/rules/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(alertHandler.UpdateRule))))
+	mux.Handle("DELETE /api/v1/alerts/rules/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(alertHandler.DeleteRule))))
+	mux.Handle("GET /api/v1/alerts/events", authService.Middleware(http.HandlerFunc(alertHandler.ListEvents)))
+	mux.Handle("POST /api/v1/alerts/test-notification", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(alertHandler.TestNotification))))
+	mux.Handle("GET /ws/live", liveManager)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

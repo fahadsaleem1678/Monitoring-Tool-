@@ -202,6 +202,18 @@ input {
   margin-top: 18px;
 }
 
+.alerts-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.alerts-main,
+.alerts-side {
+  min-width: 0;
+}
+
 .dashboard-sidebar,
 .dashboard-detail {
   min-width: 0;
@@ -288,6 +300,32 @@ input {
 
 .danger-button,
 .panel-delete {
+  background: #4a2727;
+  color: #f17d73;
+}
+
+.danger-button.small {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 0.78rem;
+}
+
+.success-pill,
+.error-pill {
+  display: inline-flex;
+  max-width: 360px;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.success-pill {
+  background: #1f3c32;
+  color: #72d79b;
+}
+
+.error-pill {
   background: #4a2727;
   color: #f17d73;
 }
@@ -438,6 +476,71 @@ input {
   padding: 18px;
 }
 
+.data-table {
+  display: grid;
+  gap: 8px;
+}
+
+.data-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(0, 1.6fr) 100px 90px 74px;
+  gap: 10px;
+  align-items: center;
+  min-height: 54px;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  padding: 10px;
+  background: #171c22;
+  color: #8ea2b8;
+  font-size: 0.86rem;
+}
+
+.data-row strong {
+  color: #f4f7fb;
+}
+
+.data-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.table-head {
+  min-height: 38px;
+  background: #25303a;
+  color: #d6dde8;
+  font-weight: 800;
+}
+
+.event-row {
+  grid-template-columns: 160px minmax(0, 1fr) 180px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.form-grid select {
+  min-height: 40px;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #f4f7fb;
+  background: #101317;
+}
+
+.checkbox-line {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.checkbox-line input {
+  min-height: auto;
+}
+
 .workbench-band header span {
   flex: 0 0 auto;
   color: #8ea2b8;
@@ -492,7 +595,13 @@ pre {
 @media (max-width: 900px) {
   .summary-strip,
   .dashboard-grid,
-  .dashboards-layout {
+  .dashboards-layout,
+  .alerts-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .data-row,
+  .event-row {
     grid-template-columns: 1fr;
   }
 }

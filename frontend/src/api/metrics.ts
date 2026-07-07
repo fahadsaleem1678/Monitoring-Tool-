@@ -17,6 +17,17 @@ type MetricsResponse<T> = {
   data: PrometheusQueryData<T>;
 };
 
+type PrometheusScalarData = {
+  resultType: "scalar";
+  result: [number, string];
+};
+
+type ScalarMetricsResponse = {
+  data: PrometheusScalarData;
+};
+
+let prometheusTimeCache: { value: number; expiresAt: number } | null = null;
+
 export async function queryInstant(query: string): Promise<PrometheusQueryData<PrometheusVectorResult>> {
   const params = new URLSearchParams({ query });
   const response = await fetch(`/api/v1/metrics/query?${params.toString()}`);
@@ -28,7 +39,7 @@ export async function queryRange(
   rangeSeconds: number,
   stepSeconds: number
 ): Promise<PrometheusQueryData<PrometheusMatrixResult>> {
-  const end = Date.now() / 1000;
+  const end = await prometheusNowSeconds();
   const start = end - rangeSeconds;
   const params = new URLSearchParams({
     query,
@@ -38,6 +49,31 @@ export async function queryRange(
   });
   const response = await fetch(`/api/v1/metrics/query-range?${params.toString()}`);
   return readMetricsResponse<PrometheusMatrixResult>(response);
+}
+
+async function prometheusNowSeconds(): Promise<number> {
+  const now = Date.now();
+  if (prometheusTimeCache && prometheusTimeCache.expiresAt > now) {
+    return prometheusTimeCache.value;
+  }
+
+  const params = new URLSearchParams({ query: "time()" });
+  const response = await fetch(`/api/v1/metrics/query?${params.toString()}`);
+  const body = (await response.json()) as ScalarMetricsResponse | { error?: string };
+  if (!response.ok) {
+    throw new Error("error" in body && body.error ? body.error : `Prometheus time request failed with HTTP ${response.status}`);
+  }
+  if (!("data" in body) || body.data.resultType !== "scalar") {
+    throw new Error("Prometheus time response was not a scalar");
+  }
+
+  const value = Number(body.data.result[1]);
+  if (!Number.isFinite(value)) {
+    throw new Error("Prometheus time response was invalid");
+  }
+
+  prometheusTimeCache = { value, expiresAt: now + 15_000 };
+  return value;
 }
 
 async function readMetricsResponse<T>(response: Response): Promise<PrometheusQueryData<T>> {

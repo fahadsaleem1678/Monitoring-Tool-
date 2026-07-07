@@ -10,7 +10,11 @@ export default defineConfig({
     proxy: {
       "/api": backendTarget,
       "/healthz": backendTarget,
-      "/readyz": backendTarget
+      "/readyz": backendTarget,
+      "/ws": {
+        target: backendTarget,
+        ws: true
+      }
     }
   }
 });

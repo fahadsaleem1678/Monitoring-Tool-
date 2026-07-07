@@ -20,6 +20,7 @@ type Config struct {
 	PrometheusURL        string
 	PrometheusTimeout    time.Duration
 	PrometheusSmokeQuery string
+	SlackWebhookURL      string
 	LogLevel             slog.Level
 }
 
@@ -36,6 +37,7 @@ func Load() Config {
 		PrometheusURL:        trimRightSlash(env("PROMETHEUS_URL", "http://localhost:9090")),
 		PrometheusTimeout:    envDurationSeconds("PROMETHEUS_TIMEOUT_SECONDS", 10),
 		PrometheusSmokeQuery: env("PROMETHEUS_SMOKE_QUERY", "up"),
+		SlackWebhookURL:      env("SLACK_WEBHOOK_URL", ""),
 		LogLevel:             envLogLevel("LOG_LEVEL", slog.LevelInfo),
 	}
 }

@@ -11,7 +11,8 @@ import {
   type PanelInput,
   type SavedPanel
 } from "../../api/dashboards";
-import { queryRange, type PrometheusMatrixResult } from "../../api/metrics";
+import { connectLivePanels, type LiveMessage } from "../../api/live";
+import { queryRange, type PrometheusMatrixResult, type PrometheusVectorResult } from "../../api/metrics";
 import type { AuthUser } from "../../api/auth";
 import { Panel } from "../overview/Panel";
 
@@ -64,6 +65,84 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
     void refreshList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (selected?.status !== "ready" || (selected.data.panels ?? []).length === 0) {
+      return;
+    }
+
+    const panels = selected.data.panels ?? [];
+    let closed = false;
+    let reconnectTimer: number | undefined;
+    let fallbackTimer: number | undefined;
+    let stopSocket: (() => void) | undefined;
+
+    const startFallback = () => {
+      if (fallbackTimer != null) {
+        return;
+      }
+      fallbackTimer = window.setInterval(() => {
+        for (const panel of panels) {
+          void loadSavedPanel(panel, setPanelData);
+        }
+      }, 30_000);
+    };
+
+    const stopFallback = () => {
+      window.clearInterval(fallbackTimer);
+      fallbackTimer = undefined;
+    };
+
+    const startSocket = () => {
+      stopSocket = connectLivePanels(
+        token,
+        panels.map((panel) => ({
+          panel_id: panel.id,
+          promql: panel.promql,
+          refresh_interval_seconds: panel.refresh_interval_seconds
+        })),
+        {
+          onMessage: handleLiveMessage,
+          onDisconnect: () => {
+            if (closed) {
+              return;
+            }
+            startFallback();
+            if (reconnectTimer == null) {
+              reconnectTimer = window.setTimeout(() => {
+                reconnectTimer = undefined;
+                startSocket();
+              }, 5_000);
+            }
+          }
+        }
+      );
+    };
+
+    const handleLiveMessage = (message: LiveMessage) => {
+      if (message.type === "metric_update") {
+        stopFallback();
+        setPanelData((current) => appendVectorUpdate(current, message.panel_id, message.data.result, message.timestamp));
+        return;
+      }
+      if (message.type === "error" && message.panel_id) {
+        const panelID = message.panel_id;
+        setPanelData((current) => ({
+          ...current,
+          [panelID]: { status: "error", message: message.message }
+        }));
+      }
+    };
+
+    startSocket();
+
+    return () => {
+      closed = true;
+      stopSocket?.();
+      window.clearTimeout(reconnectTimer);
+      window.clearInterval(fallbackTimer);
+    };
+  }, [selected, token]);
 
   async function submitDashboard(event: FormEvent) {
     event.preventDefault();
@@ -228,4 +307,37 @@ function matrixToSeries(results: PrometheusMatrixResult[]) {
     label: result.metric.node ?? result.metric.instance ?? result.metric.namespace ?? `series ${index + 1}`,
     points: result.values.map(([timestamp, value]) => [timestamp, Number(value)] as [number, number])
   }));
+}
+
+function appendVectorUpdate(
+  current: Record<string, Loadable<PrometheusMatrixResult[]>>,
+  panelID: string,
+  results: PrometheusVectorResult[],
+  timestamp: number
+): Record<string, Loadable<PrometheusMatrixResult[]>> {
+  const previous = current[panelID];
+  const byMetric = new Map<string, PrometheusMatrixResult>();
+
+  if (previous?.status === "ready") {
+    for (const series of previous.data) {
+      byMetric.set(metricKey(series.metric), { metric: series.metric, values: [...series.values] });
+    }
+  }
+
+  for (const result of results) {
+    const key = metricKey(result.metric);
+    const series = byMetric.get(key) ?? { metric: result.metric, values: [] };
+    const point: [number, string] = [timestamp, result.value[1]];
+    series.values = [...series.values, point].slice(-120);
+    byMetric.set(key, series);
+  }
+
+  return {
+    ...current,
+    [panelID]: { status: "ready", data: [...byMetric.values()] }
+  };
+}
+
+function metricKey(metric: Record<string, string>) {
+  return JSON.stringify(Object.entries(metric).sort(([left], [right]) => left.localeCompare(right)));
 }

@@ -47,6 +47,29 @@ type Panel struct {
 	SettingsJSON           map[string]any `json:"settings_json"`
 }
 
+type AlertRule struct {
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	PromQL     string    `json:"promql"`
+	Operator   string    `json:"operator"`
+	Threshold  float64   `json:"threshold"`
+	ForSeconds int       `json:"for_seconds"`
+	Severity   string    `json:"severity"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type AlertEvent struct {
+	ID         uuid.UUID  `json:"id"`
+	RuleID     *uuid.UUID `json:"rule_id,omitempty"`
+	Status     string     `json:"status"`
+	Value      *float64   `json:"value,omitempty"`
+	Message    string     `json:"message"`
+	StartedAt  time.Time  `json:"started_at"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+}
+
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -268,6 +291,128 @@ func (s *Store) DeletePanel(ctx context.Context, id uuid.UUID) error {
 	}
 	_, _ = s.pool.Exec(ctx, `update dashboards set updated_at = now() where id = $1`, dashboardID)
 	return nil
+}
+
+func (s *Store) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
+	rows, err := s.pool.Query(ctx, `
+		select id, name, promql, operator, threshold, for_seconds, severity, enabled, created_at, updated_at
+		from alert_rules
+		order by updated_at desc
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	rules := []AlertRule{}
+	for rows.Next() {
+		var rule AlertRule
+		if err := rows.Scan(&rule.ID, &rule.Name, &rule.PromQL, &rule.Operator, &rule.Threshold, &rule.ForSeconds, &rule.Severity, &rule.Enabled, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
+			return nil, err
+		}
+		rules = append(rules, rule)
+	}
+	return rules, rows.Err()
+}
+
+func (s *Store) CreateAlertRule(ctx context.Context, rule AlertRule) (AlertRule, error) {
+	rule.ID = uuid.New()
+	if rule.ForSeconds <= 0 {
+		rule.ForSeconds = 60
+	}
+	if rule.Severity == "" {
+		rule.Severity = "warning"
+	}
+
+	err := s.pool.QueryRow(ctx, `
+		insert into alert_rules (id, name, promql, operator, threshold, for_seconds, severity, enabled, created_at, updated_at)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+		returning id, name, promql, operator, threshold, for_seconds, severity, enabled, created_at, updated_at
+	`, rule.ID, rule.Name, rule.PromQL, rule.Operator, rule.Threshold, rule.ForSeconds, rule.Severity, rule.Enabled).Scan(
+		&rule.ID, &rule.Name, &rule.PromQL, &rule.Operator, &rule.Threshold, &rule.ForSeconds, &rule.Severity, &rule.Enabled, &rule.CreatedAt, &rule.UpdatedAt,
+	)
+	return rule, err
+}
+
+func (s *Store) UpdateAlertRule(ctx context.Context, rule AlertRule) (AlertRule, error) {
+	err := s.pool.QueryRow(ctx, `
+		update alert_rules
+		set name = $2, promql = $3, operator = $4, threshold = $5, for_seconds = $6,
+		    severity = $7, enabled = $8, updated_at = now()
+		where id = $1
+		returning id, name, promql, operator, threshold, for_seconds, severity, enabled, created_at, updated_at
+	`, rule.ID, rule.Name, rule.PromQL, rule.Operator, rule.Threshold, rule.ForSeconds, rule.Severity, rule.Enabled).Scan(
+		&rule.ID, &rule.Name, &rule.PromQL, &rule.Operator, &rule.Threshold, &rule.ForSeconds, &rule.Severity, &rule.Enabled, &rule.CreatedAt, &rule.UpdatedAt,
+	)
+	return rule, err
+}
+
+func (s *Store) DeleteAlertRule(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `delete from alert_rules where id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ListAlertEvents(ctx context.Context, limit int) ([]AlertEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		select id, coalesce(rule_id::text, ''), status, value, coalesce(message, ''), started_at, resolved_at
+		from alert_events
+		order by started_at desc
+		limit $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []AlertEvent{}
+	for rows.Next() {
+		var event AlertEvent
+		var ruleIDText string
+		if err := rows.Scan(&event.ID, &ruleIDText, &event.Status, &event.Value, &event.Message, &event.StartedAt, &event.ResolvedAt); err != nil {
+			return nil, err
+		}
+		if ruleIDText != "" {
+			ruleID, err := uuid.Parse(ruleIDText)
+			if err != nil {
+				return nil, err
+			}
+			event.RuleID = &ruleID
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) CreateAlertEvent(ctx context.Context, event AlertEvent) (AlertEvent, error) {
+	event.ID = uuid.New()
+	var ruleIDText string
+	err := s.pool.QueryRow(ctx, `
+		insert into alert_events (id, rule_id, status, value, message, started_at, resolved_at)
+		values ($1, $2, $3, $4, $5, now(), $6)
+		returning id, coalesce(rule_id::text, ''), status, value, coalesce(message, ''), started_at, resolved_at
+	`, event.ID, event.RuleID, event.Status, event.Value, event.Message, event.ResolvedAt).Scan(
+		&event.ID, &ruleIDText, &event.Status, &event.Value, &event.Message, &event.StartedAt, &event.ResolvedAt,
+	)
+	if err != nil {
+		return AlertEvent{}, err
+	}
+	if ruleIDText != "" {
+		ruleID, err := uuid.Parse(ruleIDText)
+		if err != nil {
+			return AlertEvent{}, err
+		}
+		event.RuleID = &ruleID
+	}
+	return event, nil
 }
 
 func NotFound(err error) bool {

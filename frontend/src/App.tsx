@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { login, me, type AuthSession } from "./api/auth";
 import { getBackendHealth, type BackendHealth } from "./api/health";
 import { queryInstant, queryRange, type PrometheusMatrixResult, type PrometheusVectorResult } from "./api/metrics";
+import { AlertsView } from "./components/alerts/AlertsView";
 import { LoginView } from "./components/auth/LoginView";
 import { DashboardManager } from "./components/dashboards/DashboardManager";
 import { MetricCard } from "./components/overview/MetricCard";
@@ -50,7 +51,7 @@ const panels: PanelDefinition[] = [
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(() => readStoredSession());
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [activeView, setActiveView] = useState<"overview" | "dashboards">("overview");
+  const [activeView, setActiveView] = useState<"overview" | "dashboards" | "alerts">("overview");
   const [health, setHealth] = useState<Loadable<BackendHealth>>({ status: "loading" });
   const [cards, setCards] = useState<Loadable<CardMetrics>>({ status: "loading" });
   const [panelData, setPanelData] = useState<Record<string, Loadable<PrometheusMatrixResult[]>>>(
@@ -138,6 +139,9 @@ export function App() {
         <button type="button" className={activeView === "dashboards" ? "active" : ""} onClick={() => setActiveView("dashboards")}>
           Dashboards
         </button>
+        <button type="button" className={activeView === "alerts" ? "active" : ""} onClick={() => setActiveView("alerts")}>
+          Alerts
+        </button>
       </nav>
 
       {activeView === "overview" && (
@@ -185,6 +189,7 @@ export function App() {
       )}
 
       {activeView === "dashboards" && <DashboardManager token={session.token} user={session.user} />}
+      {activeView === "alerts" && <AlertsView token={session.token} user={session.user} />}
     </main>
   );
 }
