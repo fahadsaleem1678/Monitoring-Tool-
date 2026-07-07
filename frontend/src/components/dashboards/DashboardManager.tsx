@@ -15,6 +15,7 @@ import { connectLivePanels, type LiveMessage } from "../../api/live";
 import { queryRange, type PrometheusMatrixResult, type PrometheusVectorResult } from "../../api/metrics";
 import type { AuthUser } from "../../api/auth";
 import { Panel } from "../overview/Panel";
+import { VisualQueryBuilder } from "../query/VisualQueryBuilder";
 
 type DashboardManagerProps = {
   token: string;
@@ -269,6 +270,7 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
                   placeholder="PromQL"
                   spellCheck={false}
                 />
+                <VisualQueryBuilder value={panelForm.promql} onApply={(promql) => setPanelForm({ ...panelForm, promql })} />
                 <div className="form-grid">
                   <label>
                     Visualization

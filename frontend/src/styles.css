@@ -186,7 +186,8 @@ textarea {
   min-width: 0;
 }
 
-input {
+input,
+select {
   min-height: 40px;
   border: 1px solid #2b333d;
   border-radius: 8px;
@@ -662,6 +663,107 @@ input {
   gap: 10px;
 }
 
+.visual-builder {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  padding: 14px;
+  background: #101317;
+}
+
+.visual-builder header,
+.builder-section-head,
+.generated-query {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.visual-builder h3 {
+  margin: 0;
+  color: #f4f7fb;
+  font-size: 0.95rem;
+}
+
+.visual-builder p {
+  margin: 5px 0 0;
+  font-size: 0.82rem;
+}
+
+.visual-builder header span,
+.builder-empty {
+  color: #8ea2b8;
+  font-size: 0.82rem;
+}
+
+.visual-builder .builder-error {
+  color: #f17d73;
+}
+
+.builder-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) repeat(3, minmax(120px, 0.8fr));
+  gap: 8px;
+}
+
+.visual-builder label {
+  display: grid;
+  gap: 6px;
+  color: #8ea2b8;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.filter-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.builder-section-head strong {
+  color: #f4f7fb;
+  font-size: 0.9rem;
+}
+
+.builder-section-head button,
+.generated-query button {
+  min-height: 32px;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #25303a;
+  color: #f4f7fb;
+  font-weight: 800;
+}
+
+.generated-query button {
+  background: #70d6ff;
+  color: #101317;
+}
+
+.filter-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) 76px minmax(130px, 1.2fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.generated-query {
+  align-items: center;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  padding: 10px;
+  background: #171c22;
+}
+
+.generated-query code {
+  min-width: 0;
+  color: #d6dde8;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
 textarea {
   min-height: 76px;
   width: 100%;
@@ -736,5 +838,17 @@ pre {
 
   .query-row {
     grid-template-columns: 1fr;
+  }
+
+  .builder-grid,
+  .filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .visual-builder header,
+  .builder-section-head,
+  .generated-query {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

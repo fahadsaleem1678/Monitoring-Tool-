@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { queryInstant, type PrometheusVectorResult } from "../../api/metrics";
+import { VisualQueryBuilder } from "../query/VisualQueryBuilder";
 
 type WorkbenchState =
   | { status: "idle" }
@@ -23,6 +24,7 @@ export function QueryWorkbench() {
 
   return (
     <section className="query-workbench">
+      <VisualQueryBuilder value={query} onApply={setQuery} />
       <div className="query-row">
         <textarea value={query} onChange={(event) => setQuery(event.target.value)} spellCheck={false} />
         <button type="button" onClick={runQuery} disabled={state.status === "loading"}>

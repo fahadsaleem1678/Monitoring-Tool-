@@ -33,6 +33,12 @@
   - alert event API
   - Slack test notification API
   - frontend Alerts tab
+- Phase 4 automatic alert evaluation is implemented locally after commit `233d8bb`.
+  - `backend/internal/alerting` evaluates saved rules in the background.
+  - Backend loads rules from PostgreSQL/Supabase every `ALERT_EVAL_INTERVAL_SECONDS` seconds, default `15`.
+  - Firing alerts create one open `alert_events` row with status `firing`.
+  - Resolved alerts update the open row to status `resolved` with `resolved_at`.
+  - Slack notifications are sent once when firing and once when resolved.
 
 ## Latest Visualization Work
 
@@ -59,17 +65,28 @@ The user asked for Grafana-like panel visualizations and a title change. The cur
 docker run --rm -v "${PWD}\frontend:/app" -w /app node:20-alpine npm run build
 ```
 
+## Latest Query Builder Work
+
+The user asked for a Visual Query Builder so users can build PromQL without typing it manually. The current local implementation includes:
+
+- New component: `frontend/src/components/query/VisualQueryBuilder.tsx`.
+- New frontend API helpers in `frontend/src/api/metrics.ts`:
+  - `listMetricNames()`
+  - `listLabelValues(label)`
+- Query builder is embedded in:
+  - `frontend/src/components/overview/QueryWorkbench.tsx`
+  - `frontend/src/components/dashboards/DashboardManager.tsx`
+- Users can select/search a metric, add label filters, choose aggregation, optionally group by labels, optionally wrap counters in `rate(metric[window])`, preview the generated PromQL, and apply it to the current query field.
+- Frontend build passed after these changes:
+
+```powershell
+docker run --rm -v "${PWD}\frontend:/app" -w /app node:20-alpine npm run build
+```
+
 ## Important Known Issues / Next Work
 
-- Phase 4 automatic alert evaluation is not implemented yet.
-- Next backend work:
-  - periodically load enabled alert rules
-  - run each PromQL instant query
-  - compare result values against operator/threshold
-  - honor `for_seconds`
-  - create firing/resolved `alert_events`
-  - send Slack notifications only on state transitions
-- Current Alerts tab can create rules and send Slack test notifications, but saved alert rules do not auto-fire yet.
+- Current Alerts tab can create rules, send Slack test notifications, and list alert events. Event refresh is manual from the UI.
+- Automatic alert pending state is in memory. If the backend restarts, `for_seconds` pending timers restart, but existing open firing events are still read from PostgreSQL.
 - Prometheus port-forward must be active for charts and backend readiness.
 - If charts show `No data`, check `http://localhost:9090/api/v1/query?query=up`.
 

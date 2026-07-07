@@ -315,6 +315,32 @@ func (s *Store) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 	return rules, rows.Err()
 }
 
+func (s *Store) OpenAlertEventByRuleID(ctx context.Context, ruleID uuid.UUID) (AlertEvent, bool, error) {
+	var event AlertEvent
+	var ruleIDText string
+	err := s.pool.QueryRow(ctx, `
+		select id, coalesce(rule_id::text, ''), status, value, coalesce(message, ''), started_at, resolved_at
+		from alert_events
+		where rule_id = $1 and status = 'firing' and resolved_at is null
+		order by started_at desc
+		limit 1
+	`, ruleID).Scan(&event.ID, &ruleIDText, &event.Status, &event.Value, &event.Message, &event.StartedAt, &event.ResolvedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return AlertEvent{}, false, nil
+		}
+		return AlertEvent{}, false, err
+	}
+	if ruleIDText != "" {
+		parsedRuleID, err := uuid.Parse(ruleIDText)
+		if err != nil {
+			return AlertEvent{}, false, err
+		}
+		event.RuleID = &parsedRuleID
+	}
+	return event, true, nil
+}
+
 func (s *Store) CreateAlertRule(ctx context.Context, rule AlertRule) (AlertRule, error) {
 	rule.ID = uuid.New()
 	if rule.ForSeconds <= 0 {
@@ -348,14 +374,23 @@ func (s *Store) UpdateAlertRule(ctx context.Context, rule AlertRule) (AlertRule,
 }
 
 func (s *Store) DeleteAlertRule(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.pool.Exec(ctx, `delete from alert_rules where id = $1`, id)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `update alert_events set rule_id = null where rule_id = $1`, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `delete from alert_rules where id = $1`, id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ListAlertEvents(ctx context.Context, limit int) ([]AlertEvent, error) {
@@ -400,6 +435,30 @@ func (s *Store) CreateAlertEvent(ctx context.Context, event AlertEvent) (AlertEv
 		values ($1, $2, $3, $4, $5, now(), $6)
 		returning id, coalesce(rule_id::text, ''), status, value, coalesce(message, ''), started_at, resolved_at
 	`, event.ID, event.RuleID, event.Status, event.Value, event.Message, event.ResolvedAt).Scan(
+		&event.ID, &ruleIDText, &event.Status, &event.Value, &event.Message, &event.StartedAt, &event.ResolvedAt,
+	)
+	if err != nil {
+		return AlertEvent{}, err
+	}
+	if ruleIDText != "" {
+		ruleID, err := uuid.Parse(ruleIDText)
+		if err != nil {
+			return AlertEvent{}, err
+		}
+		event.RuleID = &ruleID
+	}
+	return event, nil
+}
+
+func (s *Store) ResolveAlertEvent(ctx context.Context, id uuid.UUID, value *float64, message string) (AlertEvent, error) {
+	var event AlertEvent
+	var ruleIDText string
+	err := s.pool.QueryRow(ctx, `
+		update alert_events
+		set status = 'resolved', value = $2, message = $3, resolved_at = now()
+		where id = $1
+		returning id, coalesce(rule_id::text, ''), status, value, coalesce(message, ''), started_at, resolved_at
+	`, id, value, message).Scan(
 		&event.ID, &ruleIDText, &event.Status, &event.Value, &event.Message, &event.StartedAt, &event.ResolvedAt,
 	)
 	if err != nil {

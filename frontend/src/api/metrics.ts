@@ -26,6 +26,10 @@ type ScalarMetricsResponse = {
   data: PrometheusScalarData;
 };
 
+type LabelValuesResponse = {
+  data: string[];
+};
+
 let prometheusTimeCache: { value: number; expiresAt: number } | null = null;
 
 export async function queryInstant(query: string): Promise<PrometheusQueryData<PrometheusVectorResult>> {
@@ -49,6 +53,32 @@ export async function queryRange(
   });
   const response = await fetch(`/api/v1/metrics/query-range?${params.toString()}`);
   return readMetricsResponse<PrometheusMatrixResult>(response);
+}
+
+export async function listMetricNames(): Promise<string[]> {
+  const params = new URLSearchParams({ label: "__name__" });
+  const response = await fetch(`/api/v1/metrics/label-values?${params.toString()}`);
+  const body = (await response.json()) as LabelValuesResponse | { error?: string };
+  if (!response.ok) {
+    throw new Error("error" in body && body.error ? body.error : `Metric names request failed with HTTP ${response.status}`);
+  }
+  if (!("data" in body) || !Array.isArray(body.data)) {
+    throw new Error("Metric names response did not include data");
+  }
+  return body.data;
+}
+
+export async function listLabelValues(label: string): Promise<string[]> {
+  const params = new URLSearchParams({ label });
+  const response = await fetch(`/api/v1/metrics/label-values?${params.toString()}`);
+  const body = (await response.json()) as LabelValuesResponse | { error?: string };
+  if (!response.ok) {
+    throw new Error("error" in body && body.error ? body.error : `Label values request failed with HTTP ${response.status}`);
+  }
+  if (!("data" in body) || !Array.isArray(body.data)) {
+    throw new Error("Label values response did not include data");
+  }
+  return body.data;
 }
 
 async function prometheusNowSeconds(): Promise<number> {

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"monitoring-tool/backend/internal/alerting"
 	"monitoring-tool/backend/internal/auth"
 	"monitoring-tool/backend/internal/config"
 	"monitoring-tool/backend/internal/health"
@@ -51,7 +52,9 @@ func main() {
 	metricsHandler := httpapi.NewMetricsHandler(prom)
 	dashboardHandler := httpapi.NewDashboardHandler(appStore, prom)
 	liveManager := live.NewManager(prom, authService, logger)
-	alertHandler := httpapi.NewAlertHandler(appStore, notify.NewSlackNotifier(cfg.SlackWebhookURL))
+	slackNotifier := notify.NewSlackNotifier(cfg.SlackWebhookURL)
+	alertHandler := httpapi.NewAlertHandler(appStore, slackNotifier)
+	alertEvaluator := alerting.NewEvaluator(appStore, prom, slackNotifier, logger, cfg.AlertEvalInterval)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler.Healthz)
@@ -89,6 +92,11 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go alertEvaluator.Run(ctx)
+
 	go func() {
 		logger.Info("backend starting", "addr", cfg.HTTPAddr, "prometheus_url", cfg.PrometheusURL)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -97,8 +105,6 @@ func main() {
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
