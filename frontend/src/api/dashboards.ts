@@ -33,6 +33,7 @@ export type PanelInput = {
   grid_w: number;
   grid_h: number;
   refresh_interval_seconds: number;
+  settings_json?: Record<string, unknown>;
 };
 
 export async function listDashboards(token: string): Promise<Dashboard[]> {

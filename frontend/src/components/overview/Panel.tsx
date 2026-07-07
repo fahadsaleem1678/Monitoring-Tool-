@@ -1,3 +1,5 @@
+import { BarChart } from "../charts/BarChart";
+import { GaugeChart } from "../charts/GaugeChart";
 import { TimeSeriesChart } from "../charts/TimeSeriesChart";
 
 type PanelSeries = {
@@ -12,9 +14,11 @@ type PanelProps = {
   error?: string;
   series: PanelSeries[];
   unit?: string;
+  visualizationType?: "line" | "bar" | "gauge" | string;
+  gaugeMax?: number;
 };
 
-export function Panel({ title, subtitle, status, error, series, unit }: PanelProps) {
+export function Panel({ title, subtitle, status, error, series, unit, visualizationType = "line", gaugeMax }: PanelProps) {
   return (
     <section className="dashboard-panel">
       <header>
@@ -26,7 +30,11 @@ export function Panel({ title, subtitle, status, error, series, unit }: PanelPro
       </header>
       {status === "loading" && <div className="panel-message">Loading data...</div>}
       {status === "error" && <div className="panel-message error">{error}</div>}
-      {status === "ready" && <TimeSeriesChart series={series} unit={unit} />}
+      {status === "ready" && visualizationType === "bar" && <BarChart series={series} unit={unit} />}
+      {status === "ready" && visualizationType === "gauge" && <GaugeChart series={series} unit={unit} max={gaugeMax} />}
+      {status === "ready" && visualizationType !== "bar" && visualizationType !== "gauge" && (
+        <TimeSeriesChart series={series} unit={unit} />
+      )}
     </section>
   );
 }

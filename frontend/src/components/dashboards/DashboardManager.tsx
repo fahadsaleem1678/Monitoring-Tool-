@@ -246,6 +246,9 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
                       status={state.status}
                       error={state.status === "error" ? state.message : undefined}
                       series={state.status === "ready" ? matrixToSeries(state.data) : []}
+                      unit={unitFromSettings(panel.settings_json)}
+                      visualizationType={panel.visualization_type}
+                      gaugeMax={gaugeMaxFromSettings(panel.settings_json)}
                     />
                   </div>
                 );
@@ -266,6 +269,57 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
                   placeholder="PromQL"
                   spellCheck={false}
                 />
+                <div className="form-grid">
+                  <label>
+                    Visualization
+                    <select
+                      value={panelForm.visualization_type}
+                      onChange={(event) => setPanelForm({ ...panelForm, visualization_type: event.target.value })}
+                    >
+                      <option value="line">Line graph</option>
+                      <option value="bar">Bar chart</option>
+                      <option value="gauge">Gauge</option>
+                    </select>
+                  </label>
+                  <label>
+                    Unit
+                    <select
+                      value={String(panelForm.settings_json?.unit ?? "")}
+                      onChange={(event) =>
+                        setPanelForm({
+                          ...panelForm,
+                          settings_json: { ...(panelForm.settings_json ?? {}), unit: event.target.value }
+                        })
+                      }
+                    >
+                      <option value="">Number</option>
+                      <option value="%">Percent</option>
+                    </select>
+                  </label>
+                  <label>
+                    Gauge max
+                    <input
+                      type="number"
+                      value={String(panelForm.settings_json?.gauge_max ?? 100)}
+                      onChange={(event) =>
+                        setPanelForm({
+                          ...panelForm,
+                          settings_json: { ...(panelForm.settings_json ?? {}), gauge_max: Number(event.target.value) }
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Refresh seconds
+                    <input
+                      type="number"
+                      value={panelForm.refresh_interval_seconds}
+                      onChange={(event) =>
+                        setPanelForm({ ...panelForm, refresh_interval_seconds: Number(event.target.value) })
+                      }
+                    />
+                  </label>
+                </div>
                 <button type="submit">Add Panel</button>
               </form>
             )}
@@ -284,7 +338,11 @@ const defaultPanelInput: PanelInput = {
   grid_y: 0,
   grid_w: 6,
   grid_h: 4,
-  refresh_interval_seconds: 30
+  refresh_interval_seconds: 30,
+  settings_json: {
+    unit: "",
+    gauge_max: 100
+  }
 };
 
 async function loadSavedPanel(
@@ -340,4 +398,13 @@ function appendVectorUpdate(
 
 function metricKey(metric: Record<string, string>) {
   return JSON.stringify(Object.entries(metric).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function unitFromSettings(settings: Record<string, unknown> | undefined) {
+  return typeof settings?.unit === "string" ? settings.unit : "";
+}
+
+function gaugeMaxFromSettings(settings: Record<string, unknown> | undefined) {
+  const value = Number(settings?.gauge_max);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
 }

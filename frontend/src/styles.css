@@ -456,6 +456,115 @@ input {
   overflow: hidden;
 }
 
+.bar-chart {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  min-height: 220px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.7fr) minmax(0, 1.5fr) 76px;
+  gap: 10px;
+  align-items: center;
+  min-height: 28px;
+  color: #8ea2b8;
+  font-size: 0.82rem;
+}
+
+.bar-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-track {
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #25303a;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #70d6ff;
+}
+
+.bar-row strong {
+  color: #f4f7fb;
+  text-align: right;
+}
+
+.gauge-chart {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 220px;
+}
+
+.gauge-arc {
+  --gauge-value: 0%;
+  position: relative;
+  width: min(220px, 90%);
+  aspect-ratio: 2 / 1;
+  overflow: hidden;
+}
+
+.gauge-arc::before {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px 999px 0 0;
+  background: conic-gradient(from 270deg, #70d6ff var(--gauge-value), #25303a 0 50%, transparent 0);
+  content: "";
+}
+
+.gauge-arc::after {
+  position: absolute;
+  inset: 24px 24px 0;
+  border-radius: 999px 999px 0 0;
+  background: #171c22;
+  content: "";
+}
+
+.gauge-needle {
+  position: absolute;
+  z-index: 2;
+  bottom: 0;
+  left: 50%;
+  width: 46%;
+  height: 3px;
+  border-radius: 999px;
+  background: #f4f7fb;
+  transform-origin: left center;
+}
+
+.gauge-hub {
+  position: absolute;
+  z-index: 3;
+  bottom: -7px;
+  left: calc(50% - 9px);
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #f4f7fb;
+}
+
+.gauge-chart strong {
+  color: #f4f7fb;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.gauge-chart span:last-child {
+  color: #8ea2b8;
+  font-size: 0.84rem;
+}
+
 .uplot {
   color: #8ea2b8;
   background: transparent;

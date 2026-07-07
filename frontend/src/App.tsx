@@ -121,7 +121,7 @@ export function App() {
       <section className="topbar">
         <div>
           <p className="eyebrow">K3s cluster</p>
-          <h1>Monitoring Overview</h1>
+          <h1>Monitoring Tool</h1>
         </div>
         <div className="topbar-actions">
           <StatusBadge status={health.status === "ready" ? "healthy" : health.status} />
