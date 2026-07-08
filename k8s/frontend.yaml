@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitoring-tool-frontend
+  namespace: monitoring-tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monitoring-tool-frontend
+  template:
+    metadata:
+      labels:
+        app: monitoring-tool-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: monitoring-tool-frontend:0.1.0
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 80
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitoring-tool-frontend
+  namespace: monitoring-tool
+spec:
+  type: LoadBalancer
+  selector:
+    app: monitoring-tool-frontend
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http

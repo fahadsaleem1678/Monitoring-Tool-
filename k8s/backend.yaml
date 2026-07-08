@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitoring-tool-backend
+  namespace: monitoring-tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monitoring-tool-backend
+  template:
+    metadata:
+      labels:
+        app: monitoring-tool-backend
+    spec:
+      containers:
+        - name: backend
+          image: monitoring-tool-backend:0.1.0
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: monitoring-tool-config
+            - secretRef:
+                name: monitoring-tool-secrets
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitoring-tool-backend
+  namespace: monitoring-tool
+spec:
+  type: ClusterIP
+  selector:
+    app: monitoring-tool-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

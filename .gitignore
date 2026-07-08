@@ -1,4 +1,6 @@
 .env
+*.tar
+k8s/secret.yaml
 .env.local
 
 backend/bin/
