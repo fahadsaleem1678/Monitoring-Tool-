@@ -76,6 +76,16 @@ export async function createPanel(token: string, dashboardId: string, input: Pan
   return body.panel;
 }
 
+export async function updatePanel(token: string, id: string, input: PanelInput): Promise<SavedPanel> {
+  const response = await fetch(`/api/v1/panels/${id}`, {
+    method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const body = await readJSON<{ panel: SavedPanel }>(response);
+  return body.panel;
+}
+
 export async function deletePanel(token: string, id: string): Promise<void> {
   const response = await fetch(`/api/v1/panels/${id}`, {
     method: "DELETE",

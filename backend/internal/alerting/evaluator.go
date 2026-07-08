@@ -353,22 +353,24 @@ func parsePrometheusValue(raw []json.RawMessage) (float64, bool, error) {
 }
 
 func firingMessage(rule store.AlertRule, value *float64) string {
-	return fmt.Sprintf(":rotating_light: Monitoring Tool alert firing: %s\nSeverity: %s\nValue: %s %s %.4g\nQuery: `%s`",
+	return fmt.Sprintf(":rotating_light: Monitoring Tool alert firing: %s\nSeverity: %s\nValue: %s %s %.4g\nQuery: `%s`\n\n%s",
 		rule.Name,
 		rule.Severity,
 		formatValue(value),
 		rule.Operator,
 		rule.Threshold,
 		rule.PromQL,
+		firingIncidentSummary(rule, value),
 	)
 }
 
 func resolvedMessage(rule store.AlertRule, value *float64) string {
-	return fmt.Sprintf(":white_check_mark: Monitoring Tool alert resolved: %s\nSeverity: %s\nCurrent value: %s\nQuery: `%s`",
+	return fmt.Sprintf(":white_check_mark: Monitoring Tool alert resolved: %s\nSeverity: %s\nCurrent value: %s\nQuery: `%s`\n\n%s",
 		rule.Name,
 		rule.Severity,
 		formatValue(value),
 		rule.PromQL,
+		resolvedIncidentSummary(rule, value),
 	)
 }
 

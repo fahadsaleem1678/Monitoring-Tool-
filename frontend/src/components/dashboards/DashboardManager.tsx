@@ -7,12 +7,13 @@ import {
   deletePanel,
   getDashboard,
   listDashboards,
+  updatePanel,
   type Dashboard,
   type PanelInput,
   type SavedPanel
 } from "../../api/dashboards";
 import { connectLivePanels, type LiveMessage } from "../../api/live";
-import { queryRange, type PrometheusMatrixResult, type PrometheusVectorResult } from "../../api/metrics";
+import { listLabelValues, queryRange, type PrometheusMatrixResult, type PrometheusVectorResult } from "../../api/metrics";
 import type { AuthUser } from "../../api/auth";
 import { Panel } from "../overview/Panel";
 import { VisualQueryBuilder } from "../query/VisualQueryBuilder";
@@ -27,12 +28,39 @@ type Loadable<T> =
   | { status: "ready"; data: T }
   | { status: "error"; message: string };
 
+type DashboardVariable = {
+  id: string;
+  name: string;
+  label: string;
+  value: string;
+};
+
+const timeRangeOptions = [
+  { label: "Last 15m", seconds: 15 * 60 },
+  { label: "Last 1h", seconds: 60 * 60 },
+  { label: "Last 6h", seconds: 6 * 60 * 60 },
+  { label: "Last 24h", seconds: 24 * 60 * 60 }
+];
+
+const refreshOptions = [
+  { label: "Off", seconds: 0 },
+  { label: "15s", seconds: 15 },
+  { label: "30s", seconds: 30 },
+  { label: "1m", seconds: 60 },
+  { label: "5m", seconds: 5 * 60 }
+];
+
 export function DashboardManager({ token, user }: DashboardManagerProps) {
   const [dashboards, setDashboards] = useState<Loadable<Dashboard[]>>({ status: "loading" });
   const [selected, setSelected] = useState<Loadable<Dashboard> | null>(null);
   const [form, setForm] = useState({ title: "New Kubernetes Dashboard", description: "" });
   const [panelForm, setPanelForm] = useState<PanelInput>(defaultPanelInput);
+  const [editingPanel, setEditingPanel] = useState<{ id: string; input: PanelInput } | null>(null);
   const [panelData, setPanelData] = useState<Record<string, Loadable<PrometheusMatrixResult[]>>>({});
+  const [variables, setVariables] = useState<DashboardVariable[]>([]);
+  const [timeRangeSeconds, setTimeRangeSeconds] = useState(60 * 60);
+  const [dashboardRefreshSeconds, setDashboardRefreshSeconds] = useState(30);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const isAdmin = user.role === "admin";
 
   async function refreshList() {
@@ -53,9 +81,14 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
     try {
       const dashboard = await getDashboard(token, id);
       setSelected({ status: "ready", data: dashboard });
+      setEditingPanel(null);
       setPanelData({});
+      const nextVariables = loadDashboardVariables(dashboard);
+      setVariables(nextVariables);
+      const nextValues = variableValueMap(nextVariables);
+      setLastRefreshed(new Date());
       for (const panel of dashboard.panels ?? []) {
-        void loadSavedPanel(panel, setPanelData);
+        void loadSavedPanel(panel, setPanelData, nextValues, timeRangeSeconds);
       }
     } catch (error) {
       setSelected({ status: "error", message: error instanceof Error ? error.message : "Dashboard load failed" });
@@ -84,7 +117,7 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
       }
       fallbackTimer = window.setInterval(() => {
         for (const panel of panels) {
-          void loadSavedPanel(panel, setPanelData);
+          void loadSavedPanel(panel, setPanelData, variableValueMap(variables), timeRangeSeconds);
         }
       }, 30_000);
     };
@@ -99,7 +132,7 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
         token,
         panels.map((panel) => ({
           panel_id: panel.id,
-          promql: panel.promql,
+          promql: substituteVariables(panel.promql, variableValueMap(variables)),
           refresh_interval_seconds: panel.refresh_interval_seconds
         })),
         {
@@ -143,7 +176,37 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
       window.clearTimeout(reconnectTimer);
       window.clearInterval(fallbackTimer);
     };
-  }, [selected, token]);
+  }, [selected, token, variables, timeRangeSeconds]);
+
+  useEffect(() => {
+    if (selected?.status !== "ready") {
+      return;
+    }
+    saveDashboardVariables(selected.data.id, variables);
+    reloadDashboardPanels(selected.data.panels ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variables, timeRangeSeconds]);
+
+  useEffect(() => {
+    if (selected?.status !== "ready" || dashboardRefreshSeconds <= 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      reloadDashboardPanels(selected.data.panels ?? []);
+    }, dashboardRefreshSeconds * 1000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, variables, timeRangeSeconds, dashboardRefreshSeconds]);
+
+  function reloadDashboardPanels(panels: SavedPanel[]) {
+    setPanelData({});
+    setLastRefreshed(new Date());
+    const values = variableValueMap(variables);
+    for (const panel of panels) {
+      void loadSavedPanel(panel, setPanelData, values, timeRangeSeconds);
+    }
+  }
 
   async function submitDashboard(event: FormEvent) {
     event.preventDefault();
@@ -160,6 +223,17 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
     }
     await createPanel(token, selected.data.id, panelForm);
     setPanelForm(defaultPanelInput);
+    await openDashboard(selected.data.id);
+    await refreshList();
+  }
+
+  async function submitPanelEdit(event: FormEvent) {
+    event.preventDefault();
+    if (selected?.status !== "ready" || editingPanel == null) {
+      return;
+    }
+    await updatePanel(token, editingPanel.id, editingPanel.input);
+    setEditingPanel(null);
     await openDashboard(selected.data.id);
     await refreshList();
   }
@@ -231,30 +305,123 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
               )}
             </header>
 
+            <DashboardTimeControls
+              timeRangeSeconds={timeRangeSeconds}
+              refreshSeconds={dashboardRefreshSeconds}
+              lastRefreshed={lastRefreshed}
+              onTimeRangeChange={setTimeRangeSeconds}
+              onRefreshChange={setDashboardRefreshSeconds}
+              onRefreshNow={() => reloadDashboardPanels(selected.data.panels ?? [])}
+            />
+
+            <DashboardVariables
+              dashboardID={selected.data.id}
+              panels={selected.data.panels ?? []}
+              variables={variables}
+              onChange={setVariables}
+            />
+
             <section className="dashboard-grid">
               {(selected.data.panels ?? []).map((panel) => {
                 const state = panelData[panel.id] ?? { status: "loading" as const };
                 return (
                   <div className="saved-panel-wrap" key={panel.id}>
                     {isAdmin && (
-                      <button type="button" className="panel-delete" onClick={() => void removePanel(panel.id)}>
+                      <button
+                        type="button"
+                        className="panel-delete"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void removePanel(panel.id);
+                        }}
+                      >
                         Delete
                       </button>
                     )}
-                    <Panel
-                      title={panel.title}
-                      subtitle={panel.promql}
-                      status={state.status}
-                      error={state.status === "error" ? state.message : undefined}
-                      series={state.status === "ready" ? matrixToSeries(state.data) : []}
-                      unit={unitFromSettings(panel.settings_json)}
-                      visualizationType={panel.visualization_type}
-                      gaugeMax={gaugeMaxFromSettings(panel.settings_json)}
-                    />
+                    <div
+                      className={isAdmin ? "panel-click-target" : undefined}
+                      role={isAdmin ? "button" : undefined}
+                      tabIndex={isAdmin ? 0 : undefined}
+                      onClick={() => {
+                        if (isAdmin) {
+                          setEditingPanel({ id: panel.id, input: panelToInput(panel) });
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (isAdmin && (event.key === "Enter" || event.key === " ")) {
+                          event.preventDefault();
+                          setEditingPanel({ id: panel.id, input: panelToInput(panel) });
+                        }
+                      }}
+                    >
+                      <Panel
+                        title={panel.title}
+                        subtitle={panel.promql}
+                        status={state.status}
+                        error={state.status === "error" ? state.message : undefined}
+                        series={state.status === "ready" ? matrixToSeries(state.data) : []}
+                        unit={unitFromSettings(panel.settings_json)}
+                        visualizationType={panel.visualization_type}
+                        gaugeMax={gaugeMaxFromSettings(panel.settings_json)}
+                      />
+                    </div>
                   </div>
                 );
               })}
             </section>
+
+            {isAdmin && (
+              <form className="panel-form" onSubmit={submitPanelEdit}>
+                <header className="panel-form-header">
+                  <h2>Edit Panel</h2>
+                  {editingPanel && (
+                    <button type="button" className="secondary-button" onClick={() => setEditingPanel(null)}>
+                      Cancel
+                    </button>
+                  )}
+                </header>
+                {editingPanel == null && <div className="panel-message compact">Click a panel to edit it</div>}
+                {editingPanel != null && (
+                  <>
+                    <input
+                      value={editingPanel.input.title}
+                      onChange={(event) =>
+                        setEditingPanel({
+                          ...editingPanel,
+                          input: { ...editingPanel.input, title: event.target.value }
+                        })
+                      }
+                      placeholder="Panel title"
+                    />
+                    <textarea
+                      value={editingPanel.input.promql}
+                      onChange={(event) =>
+                        setEditingPanel({
+                          ...editingPanel,
+                          input: { ...editingPanel.input, promql: event.target.value }
+                        })
+                      }
+                      placeholder="PromQL"
+                      spellCheck={false}
+                    />
+                    <VisualQueryBuilder
+                      value={editingPanel.input.promql}
+                      onApply={(promql) =>
+                        setEditingPanel({
+                          ...editingPanel,
+                          input: { ...editingPanel.input, promql }
+                        })
+                      }
+                    />
+                    <PanelSettingsFields
+                      panel={editingPanel.input}
+                      onChange={(input) => setEditingPanel({ ...editingPanel, input })}
+                    />
+                    <button type="submit">Save Panel</button>
+                  </>
+                )}
+              </form>
+            )}
 
             {isAdmin && (
               <form className="panel-form" onSubmit={submitPanel}>
@@ -271,57 +438,7 @@ export function DashboardManager({ token, user }: DashboardManagerProps) {
                   spellCheck={false}
                 />
                 <VisualQueryBuilder value={panelForm.promql} onApply={(promql) => setPanelForm({ ...panelForm, promql })} />
-                <div className="form-grid">
-                  <label>
-                    Visualization
-                    <select
-                      value={panelForm.visualization_type}
-                      onChange={(event) => setPanelForm({ ...panelForm, visualization_type: event.target.value })}
-                    >
-                      <option value="line">Line graph</option>
-                      <option value="bar">Bar chart</option>
-                      <option value="gauge">Gauge</option>
-                    </select>
-                  </label>
-                  <label>
-                    Unit
-                    <select
-                      value={String(panelForm.settings_json?.unit ?? "")}
-                      onChange={(event) =>
-                        setPanelForm({
-                          ...panelForm,
-                          settings_json: { ...(panelForm.settings_json ?? {}), unit: event.target.value }
-                        })
-                      }
-                    >
-                      <option value="">Number</option>
-                      <option value="%">Percent</option>
-                    </select>
-                  </label>
-                  <label>
-                    Gauge max
-                    <input
-                      type="number"
-                      value={String(panelForm.settings_json?.gauge_max ?? 100)}
-                      onChange={(event) =>
-                        setPanelForm({
-                          ...panelForm,
-                          settings_json: { ...(panelForm.settings_json ?? {}), gauge_max: Number(event.target.value) }
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Refresh seconds
-                    <input
-                      type="number"
-                      value={panelForm.refresh_interval_seconds}
-                      onChange={(event) =>
-                        setPanelForm({ ...panelForm, refresh_interval_seconds: Number(event.target.value) })
-                      }
-                    />
-                  </label>
-                </div>
+                <PanelSettingsFields panel={panelForm} onChange={setPanelForm} />
                 <button type="submit">Add Panel</button>
               </form>
             )}
@@ -347,12 +464,243 @@ const defaultPanelInput: PanelInput = {
   }
 };
 
+function DashboardTimeControls({
+  timeRangeSeconds,
+  refreshSeconds,
+  lastRefreshed,
+  onTimeRangeChange,
+  onRefreshChange,
+  onRefreshNow
+}: {
+  timeRangeSeconds: number;
+  refreshSeconds: number;
+  lastRefreshed: Date | null;
+  onTimeRangeChange: (seconds: number) => void;
+  onRefreshChange: (seconds: number) => void;
+  onRefreshNow: () => void;
+}) {
+  return (
+    <section className="dashboard-time-controls" aria-label="Dashboard time controls">
+      <div className="time-control-group">
+        <label>
+          Time range
+          <select value={timeRangeSeconds} onChange={(event) => onTimeRangeChange(Number(event.target.value))}>
+            {timeRangeOptions.map((option) => (
+              <option key={option.seconds} value={option.seconds}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Auto refresh
+          <select value={refreshSeconds} onChange={(event) => onRefreshChange(Number(event.target.value))}>
+            {refreshOptions.map((option) => (
+              <option key={option.seconds} value={option.seconds}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="time-control-actions">
+        <span>{lastRefreshed ? `Last refresh ${lastRefreshed.toLocaleTimeString()}` : "Not refreshed yet"}</span>
+        <button type="button" onClick={onRefreshNow}>
+          Refresh
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function DashboardVariables({
+  dashboardID,
+  panels,
+  variables,
+  onChange
+}: {
+  dashboardID: string;
+  panels: SavedPanel[];
+  variables: DashboardVariable[];
+  onChange: (variables: DashboardVariable[]) => void;
+}) {
+  const [options, setOptions] = useState<Record<string, string[]>>({});
+  const placeholders = Array.from(new Set(panels.flatMap((panel) => variableNamesFromQuery(panel.promql))));
+
+  function addVariable(name = "namespace") {
+    const normalized = cleanVariableName(name);
+    if (variables.some((item) => item.name === normalized)) {
+      return;
+    }
+    onChange([...variables, { id: `${Date.now()}-${normalized}`, name: normalized, label: normalized, value: "" }]);
+  }
+
+  function updateVariable(id: string, patch: Partial<DashboardVariable>) {
+    onChange(
+      variables.map((variable) =>
+        variable.id === id
+          ? {
+              ...variable,
+              ...patch,
+              name: patch.name != null ? cleanVariableName(patch.name) : variable.name
+            }
+          : variable
+      )
+    );
+  }
+
+  function removeVariable(id: string) {
+    onChange(variables.filter((variable) => variable.id !== id));
+  }
+
+  function loadOptions(label: string) {
+    if (options[label]) {
+      return;
+    }
+    void listLabelValues(label)
+      .then((values) => setOptions((current) => ({ ...current, [label]: values.slice(0, 160) })))
+      .catch(() => setOptions((current) => ({ ...current, [label]: [] })));
+  }
+
+  return (
+    <section className="dashboard-variables" aria-label="Dashboard variables">
+      <header>
+        <div>
+          <h3>Template Variables</h3>
+          <p>Use names like $namespace in panel PromQL.</p>
+        </div>
+        <button type="button" onClick={() => addVariable()}>
+          Add variable
+        </button>
+      </header>
+
+      {placeholders.length > 0 && (
+        <div className="variable-suggestions">
+          {placeholders.map((name) => (
+            <button key={`${dashboardID}-${name}`} type="button" onClick={() => addVariable(name)}>
+              ${name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {variables.length === 0 && <div className="builder-empty">No variables defined</div>}
+      {variables.map((variable) => (
+        <div className="variable-row" key={variable.id}>
+          <label>
+            Name
+            <input value={variable.name} onChange={(event) => updateVariable(variable.id, { name: event.target.value })} />
+          </label>
+          <label>
+            Source label
+            <input
+              value={variable.label}
+              onFocus={() => loadOptions(variable.label)}
+              onChange={(event) => {
+                updateVariable(variable.id, { label: event.target.value, value: "" });
+                loadOptions(event.target.value);
+              }}
+              placeholder="namespace"
+            />
+          </label>
+          <label>
+            Value
+            <select
+              value={variable.value}
+              onFocus={() => loadOptions(variable.label)}
+              onChange={(event) => updateVariable(variable.id, { value: event.target.value })}
+            >
+              <option value="">All / empty</option>
+              {(options[variable.label] ?? []).map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="danger-button small" onClick={() => removeVariable(variable.id)}>
+            Remove
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function PanelSettingsFields({ panel, onChange }: { panel: PanelInput; onChange: (panel: PanelInput) => void }) {
+  return (
+    <div className="form-grid">
+      <label>
+        Visualization
+        <select value={panel.visualization_type} onChange={(event) => onChange({ ...panel, visualization_type: event.target.value })}>
+          <option value="line">Line graph</option>
+          <option value="bar">Bar chart</option>
+          <option value="gauge">Gauge</option>
+        </select>
+      </label>
+      <label>
+        Unit
+        <select
+          value={String(panel.settings_json?.unit ?? "")}
+          onChange={(event) =>
+            onChange({
+              ...panel,
+              settings_json: { ...(panel.settings_json ?? {}), unit: event.target.value }
+            })
+          }
+        >
+          <option value="">Number</option>
+          <option value="%">Percent</option>
+        </select>
+      </label>
+      <label>
+        Gauge max
+        <input
+          type="number"
+          value={String(panel.settings_json?.gauge_max ?? 100)}
+          onChange={(event) =>
+            onChange({
+              ...panel,
+              settings_json: { ...(panel.settings_json ?? {}), gauge_max: Number(event.target.value) }
+            })
+          }
+        />
+      </label>
+      <label>
+        Refresh seconds
+        <input
+          type="number"
+          value={panel.refresh_interval_seconds}
+          onChange={(event) => onChange({ ...panel, refresh_interval_seconds: Number(event.target.value) })}
+        />
+      </label>
+    </div>
+  );
+}
+
+function panelToInput(panel: SavedPanel): PanelInput {
+  return {
+    title: panel.title,
+    promql: panel.promql,
+    visualization_type: panel.visualization_type,
+    grid_x: panel.grid_x,
+    grid_y: panel.grid_y,
+    grid_w: panel.grid_w,
+    grid_h: panel.grid_h,
+    refresh_interval_seconds: panel.refresh_interval_seconds,
+    settings_json: panel.settings_json ?? {}
+  };
+}
+
 async function loadSavedPanel(
   panel: SavedPanel,
-  setPanelData: Dispatch<SetStateAction<Record<string, Loadable<PrometheusMatrixResult[]>>>>
+  setPanelData: Dispatch<SetStateAction<Record<string, Loadable<PrometheusMatrixResult[]>>>>,
+  variables: Record<string, string> = {},
+  rangeSeconds = 60 * 60
 ) {
   try {
-    const data = await queryRange(panel.promql, 60 * 60, Math.max(panel.refresh_interval_seconds, 30));
+    const stepSeconds = Math.max(panel.refresh_interval_seconds, Math.ceil(rangeSeconds / 240), 15);
+    const data = await queryRange(substituteVariables(panel.promql, variables), rangeSeconds, stepSeconds);
     setPanelData((current) => ({ ...current, [panel.id]: { status: "ready", data: data.result } }));
   } catch (error) {
     setPanelData((current) => ({
@@ -409,4 +757,62 @@ function unitFromSettings(settings: Record<string, unknown> | undefined) {
 function gaugeMaxFromSettings(settings: Record<string, unknown> | undefined) {
   const value = Number(settings?.gauge_max);
   return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function variableStorageKey(dashboardID: string) {
+  return `monitoring-tool.dashboard.${dashboardID}.variables`;
+}
+
+function loadDashboardVariables(dashboard: Dashboard): DashboardVariable[] {
+  const saved = window.localStorage.getItem(variableStorageKey(dashboard.id));
+  const savedVariables = saved ? parseSavedVariables(saved) : [];
+  const placeholders = Array.from(new Set((dashboard.panels ?? []).flatMap((panel) => variableNamesFromQuery(panel.promql))));
+  const merged = [...savedVariables];
+  for (const name of placeholders) {
+    if (!merged.some((variable) => variable.name === name)) {
+      merged.push({ id: `${dashboard.id}-${name}`, name, label: name, value: "" });
+    }
+  }
+  return merged;
+}
+
+function saveDashboardVariables(dashboardID: string, variables: DashboardVariable[]) {
+  window.localStorage.setItem(variableStorageKey(dashboardID), JSON.stringify(variables));
+}
+
+function parseSavedVariables(value: string): DashboardVariable[] {
+  try {
+    const parsed = JSON.parse(value) as DashboardVariable[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => typeof item.name === "string" && typeof item.label === "string")
+      .map((item, index) => ({
+        id: typeof item.id === "string" ? item.id : `${Date.now()}-${index}`,
+        name: cleanVariableName(item.name),
+        label: item.label,
+        value: typeof item.value === "string" ? item.value : ""
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function variableNamesFromQuery(query: string) {
+  const matches = query.matchAll(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g);
+  return Array.from(matches, (match) => match[1]);
+}
+
+function variableValueMap(variables: DashboardVariable[]) {
+  return Object.fromEntries(variables.map((variable) => [variable.name, variable.value]));
+}
+
+function substituteVariables(query: string, variables: Record<string, string>) {
+  return query.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, name: string) => variables[name] ?? "");
+}
+
+function cleanVariableName(value: string) {
+  const cleaned = value.replace(/^\$/, "").replace(/[^a-zA-Z0-9_]/g, "");
+  return cleaned || "variable";
 }

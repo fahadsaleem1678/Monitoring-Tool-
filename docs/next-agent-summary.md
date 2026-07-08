@@ -83,12 +83,33 @@ The user asked for a Visual Query Builder so users can build PromQL without typi
 docker run --rm -v "${PWD}\frontend:/app" -w /app node:20-alpine npm run build
 ```
 
+## Latest Dashboard Editing And Operations Work
+
+The current dashboard UI also includes:
+
+- Click-to-edit saved panels in `frontend/src/components/dashboards/DashboardManager.tsx`.
+- Frontend `updatePanel()` API helper in `frontend/src/api/dashboards.ts`.
+- Template variables at the top of each dashboard.
+  - Variables like `$namespace` are substituted into panel PromQL at runtime.
+  - Variable values are loaded from Prometheus label values.
+  - Variable definitions are stored in browser `localStorage`.
+- Dashboard-level time controls:
+  - Last 15m, 1h, 6h, 24h.
+  - Auto refresh off, 15s, 30s, 1m, 5m.
+  - Manual refresh and last refresh timestamp.
+- AI incident summaries for alert firing/resolved messages.
+  - Backend files: `backend/internal/alerting/incident.go` and tests in `incident_test.go`.
+  - Slack and alert event messages now include impact, likely cause, observed threshold condition, and suggested checks.
+  - Specific command hints exist for kube-state-metrics, node-exporter, Prometheus, restarts, CPU, memory, and deployment health.
+  - Alert event messages preserve multiline formatting in the UI.
+
 ## Important Known Issues / Next Work
 
 - Current Alerts tab can create rules, send Slack test notifications, and list alert events. Event refresh is manual from the UI.
 - Automatic alert pending state is in memory. If the backend restarts, `for_seconds` pending timers restart, but existing open firing events are still read from PostgreSQL.
 - Prometheus port-forward must be active for charts and backend readiness.
 - If charts show `No data`, check `http://localhost:9090/api/v1/query?query=up`.
+- K3s deployment phase is next. See `docs/k3s-deployment-handoff.md`.
 
 ## Useful Verification Commands
 
