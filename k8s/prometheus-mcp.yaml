@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-mcp
+  namespace: monitoring-tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-mcp
+  template:
+    metadata:
+      labels:
+        app: prometheus-mcp
+    spec:
+      containers:
+        - name: prometheus-mcp
+          image: prometheus-mcp:0.1.0
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8091
+          envFrom:
+            - configMapRef:
+                name: monitoring-tool-config
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-mcp
+  namespace: monitoring-tool
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus-mcp
+  ports:
+    - name: http
+      port: 8091
+      targetPort: http

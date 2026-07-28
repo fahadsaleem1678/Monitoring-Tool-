@@ -22,6 +22,7 @@ type Config struct {
 	PrometheusSmokeQuery string
 	AlertEvalInterval    time.Duration
 	SlackWebhookURL      string
+	AgentServiceToken    string
 	LogLevel             slog.Level
 }
 
@@ -40,6 +41,7 @@ func Load() Config {
 		PrometheusSmokeQuery: env("PROMETHEUS_SMOKE_QUERY", "up"),
 		AlertEvalInterval:    envDurationSeconds("ALERT_EVAL_INTERVAL_SECONDS", 15),
 		SlackWebhookURL:      env("SLACK_WEBHOOK_URL", ""),
+		AgentServiceToken:    env("AGENT_SERVICE_TOKEN", "dev-agent-token"),
 		LogLevel:             envLogLevel("LOG_LEVEL", slog.LevelInfo),
 	}
 }

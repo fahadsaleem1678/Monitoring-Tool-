@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubernetes-mcp
+  namespace: monitoring-tool
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monitoring-tool-kubernetes-mcp-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events", "nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monitoring-tool-kubernetes-mcp-readonly
+subjects:
+  - kind: ServiceAccount
+    name: kubernetes-mcp
+    namespace: monitoring-tool
+roleRef:
+  kind: ClusterRole
+  name: monitoring-tool-kubernetes-mcp-readonly
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubernetes-mcp
+  namespace: monitoring-tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubernetes-mcp
+  template:
+    metadata:
+      labels:
+        app: kubernetes-mcp
+    spec:
+      serviceAccountName: kubernetes-mcp
+      containers:
+        - name: kubernetes-mcp
+          image: kubernetes-mcp:0.1.0
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8091
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-mcp
+  namespace: monitoring-tool
+spec:
+  type: ClusterIP
+  selector:
+    app: kubernetes-mcp
+  ports:
+    - name: http
+      port: 8091
+      targetPort: http

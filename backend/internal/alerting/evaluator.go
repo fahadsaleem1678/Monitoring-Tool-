@@ -146,7 +146,7 @@ func (e *Evaluator) clearPending(ruleID uuid.UUID) {
 
 func (e *Evaluator) createFiringEvent(ctx context.Context, rule store.AlertRule, value *float64) {
 	message := firingMessage(rule, value)
-	_, err := e.store.CreateAlertEvent(ctx, store.AlertEvent{
+	event, err := e.store.CreateAlertEvent(ctx, store.AlertEvent{
 		RuleID:  &rule.ID,
 		Status:  "firing",
 		Value:   value,
@@ -157,7 +157,20 @@ func (e *Evaluator) createFiringEvent(ctx context.Context, rule store.AlertRule,
 		return
 	}
 	e.clearPending(rule.ID)
-	e.sendSlack(ctx, message, rule)
+	_, err = e.store.CreateIncidentReview(ctx, store.IncidentReview{
+		AlertEventID: &event.ID,
+		AlertRuleID:  &rule.ID,
+		Status:       "pending_investigation",
+		Severity:     rule.Severity,
+		Title:        rule.Name,
+		Summary:      message,
+		DraftMessage: message,
+	})
+	if err != nil {
+		e.logger.Error("incident review create failed", "rule_id", rule.ID.String(), "rule", rule.Name, "error", err)
+		return
+	}
+	e.logger.Info("slack notification deferred for human review", "rule_id", rule.ID.String(), "rule", rule.Name)
 }
 
 func (e *Evaluator) resolveIfOpen(ctx context.Context, rule store.AlertRule, value *float64, message string) {

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "incident-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn==0.34.0",
+  "httpx==0.28.1",
+  "prometheus-client==0.21.1"
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.3.4"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

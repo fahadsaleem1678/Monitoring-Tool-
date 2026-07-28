@@ -6,4 +6,7 @@ resources:
   - secret.yaml
   - backend.yaml
   - frontend.yaml
+  - incident-agent.yaml
+  - prometheus-mcp.yaml
+  - kubernetes-mcp.yaml
   - ingress.yaml

@@ -54,6 +54,7 @@ func main() {
 	liveManager := live.NewManager(prom, authService, logger)
 	slackNotifier := notify.NewSlackNotifier(cfg.SlackWebhookURL)
 	alertHandler := httpapi.NewAlertHandler(appStore, slackNotifier)
+	incidentHandler := httpapi.NewIncidentHandler(appStore, slackNotifier, cfg.AgentServiceToken)
 	alertEvaluator := alerting.NewEvaluator(appStore, prom, slackNotifier, logger, cfg.AlertEvalInterval)
 
 	mux := http.NewServeMux()
@@ -84,6 +85,15 @@ func main() {
 	mux.Handle("DELETE /api/v1/alerts/rules/{id}", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(alertHandler.DeleteRule))))
 	mux.Handle("GET /api/v1/alerts/events", authService.Middleware(http.HandlerFunc(alertHandler.ListEvents)))
 	mux.Handle("POST /api/v1/alerts/test-notification", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(alertHandler.TestNotification))))
+	mux.Handle("GET /api/v1/incidents", authService.Middleware(http.HandlerFunc(incidentHandler.List)))
+	mux.Handle("GET /api/v1/incidents/{id}", authService.Middleware(http.HandlerFunc(incidentHandler.ByID)))
+	mux.Handle("PUT /api/v1/incidents/{id}/draft", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.UpdateDraft))))
+	mux.Handle("POST /api/v1/incidents/{id}/approve", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.Approve))))
+	mux.Handle("POST /api/v1/incidents/{id}/reject", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.Reject))))
+	mux.Handle("POST /api/v1/incidents/{id}/broadcast", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.Broadcast))))
+	mux.HandleFunc("GET /api/v1/agent/incidents", incidentHandler.AgentList)
+	mux.HandleFunc("POST /api/v1/agent/incidents/{id}/claim", incidentHandler.AgentClaim)
+	mux.HandleFunc("POST /api/v1/agent/incidents/{id}/complete", incidentHandler.AgentComplete)
 	mux.Handle("GET /ws/live", liveManager)
 
 	server := &http.Server{

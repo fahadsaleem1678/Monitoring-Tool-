@@ -70,6 +70,48 @@ type AlertEvent struct {
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 
+type IncidentReview struct {
+	ID            uuid.UUID                   `json:"id"`
+	AlertEventID  *uuid.UUID                  `json:"alert_event_id,omitempty"`
+	AlertRuleID   *uuid.UUID                  `json:"alert_rule_id,omitempty"`
+	Status        string                      `json:"status"`
+	Severity      string                      `json:"severity"`
+	Title         string                      `json:"title"`
+	Summary       string                      `json:"summary"`
+	Confidence    string                      `json:"confidence"`
+	DraftMessage  string                      `json:"draft_message"`
+	FinalMessage  string                      `json:"final_message"`
+	AssignedTo    *uuid.UUID                  `json:"assigned_to,omitempty"`
+	ApprovedBy    *uuid.UUID                  `json:"approved_by,omitempty"`
+	ApprovedAt    *time.Time                  `json:"approved_at,omitempty"`
+	BroadcastedAt *time.Time                  `json:"broadcasted_at,omitempty"`
+	CreatedAt     time.Time                   `json:"created_at"`
+	UpdatedAt     time.Time                   `json:"updated_at"`
+	Steps         []IncidentInvestigationStep `json:"steps,omitempty"`
+	AuditEvents   []IncidentAuditEvent        `json:"audit_events,omitempty"`
+}
+
+type IncidentInvestigationStep struct {
+	ID               uuid.UUID      `json:"id"`
+	IncidentReviewID uuid.UUID      `json:"incident_review_id"`
+	StepType         string         `json:"step_type"`
+	ToolName         string         `json:"tool_name"`
+	QueryOrCommand   string         `json:"query_or_command"`
+	ResultSummary    string         `json:"result_summary"`
+	RawResultJSON    map[string]any `json:"raw_result_json"`
+	CreatedAt        time.Time      `json:"created_at"`
+}
+
+type IncidentAuditEvent struct {
+	ID               uuid.UUID      `json:"id"`
+	IncidentReviewID uuid.UUID      `json:"incident_review_id"`
+	ActorType        string         `json:"actor_type"`
+	ActorID          *uuid.UUID     `json:"actor_id,omitempty"`
+	Action           string         `json:"action"`
+	DetailsJSON      map[string]any `json:"details_json"`
+	CreatedAt        time.Time      `json:"created_at"`
+}
+
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -474,6 +516,256 @@ func (s *Store) ResolveAlertEvent(ctx context.Context, id uuid.UUID, value *floa
 	return event, nil
 }
 
+func (s *Store) CreateIncidentReview(ctx context.Context, review IncidentReview) (IncidentReview, error) {
+	review.ID = uuid.New()
+	if review.Status == "" {
+		review.Status = "pending_investigation"
+	}
+	if review.Severity == "" {
+		review.Severity = "warning"
+	}
+	var alertEventIDText, alertRuleIDText string
+	err := s.pool.QueryRow(ctx, `
+		insert into incident_reviews (id, alert_event_id, alert_rule_id, status, severity, title, summary, confidence, draft_message, final_message, created_at, updated_at)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
+		returning id, coalesce(alert_event_id::text, ''), coalesce(alert_rule_id::text, ''), status, severity, title, summary, confidence, draft_message, final_message, assigned_to, approved_by, approved_at, broadcasted_at, created_at, updated_at
+	`, review.ID, review.AlertEventID, review.AlertRuleID, review.Status, review.Severity, review.Title, review.Summary, review.Confidence, review.DraftMessage, review.FinalMessage).Scan(
+		&review.ID, &alertEventIDText, &alertRuleIDText, &review.Status, &review.Severity, &review.Title, &review.Summary, &review.Confidence, &review.DraftMessage, &review.FinalMessage, &review.AssignedTo, &review.ApprovedBy, &review.ApprovedAt, &review.BroadcastedAt, &review.CreatedAt, &review.UpdatedAt,
+	)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	return hydrateIncidentIDs(review, alertEventIDText, alertRuleIDText)
+}
+
+func (s *Store) ListIncidentReviews(ctx context.Context, limit int) ([]IncidentReview, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		select id, coalesce(alert_event_id::text, ''), coalesce(alert_rule_id::text, ''), status, severity, title, summary, confidence, draft_message, final_message, assigned_to, approved_by, approved_at, broadcasted_at, created_at, updated_at
+		from incident_reviews
+		order by created_at desc
+		limit $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	reviews := []IncidentReview{}
+	for rows.Next() {
+		review, err := scanIncidentReview(rows)
+		if err != nil {
+			return nil, err
+		}
+		reviews = append(reviews, review)
+	}
+	return reviews, rows.Err()
+}
+
+func (s *Store) IncidentReviewByID(ctx context.Context, id uuid.UUID) (IncidentReview, error) {
+	row := s.pool.QueryRow(ctx, `
+		select id, coalesce(alert_event_id::text, ''), coalesce(alert_rule_id::text, ''), status, severity, title, summary, confidence, draft_message, final_message, assigned_to, approved_by, approved_at, broadcasted_at, created_at, updated_at
+		from incident_reviews
+		where id = $1
+	`, id)
+	review, err := scanIncidentReview(row)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	steps, err := s.ListIncidentSteps(ctx, id)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	auditEvents, err := s.ListIncidentAuditEvents(ctx, id)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	review.Steps = steps
+	review.AuditEvents = auditEvents
+	return review, nil
+}
+
+func (s *Store) ClaimIncidentReview(ctx context.Context, id uuid.UUID) (IncidentReview, error) {
+	return s.updateIncidentStatus(ctx, id, "investigating", nil, nil, nil, false)
+}
+
+func (s *Store) CompleteIncidentInvestigation(ctx context.Context, id uuid.UUID, summary, confidence, draft string, steps []IncidentInvestigationStep) (IncidentReview, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	defer tx.Rollback(ctx)
+	for _, step := range steps {
+		raw := step.RawResultJSON
+		if raw == nil {
+			raw = map[string]any{}
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into incident_investigation_steps (id, incident_review_id, step_type, tool_name, query_or_command, result_summary, raw_result_json, created_at)
+			values ($1, $2, $3, $4, $5, $6, $7, now())
+		`, uuid.New(), id, step.StepType, step.ToolName, step.QueryOrCommand, step.ResultSummary, raw); err != nil {
+			return IncidentReview{}, err
+		}
+	}
+	tag, err := tx.Exec(ctx, `
+		update incident_reviews
+		set status = 'awaiting_review', summary = $2, confidence = $3, draft_message = $4, updated_at = now()
+		where id = $1 and status = 'investigating'
+	`, id, summary, confidence, draft)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return IncidentReview{}, pgx.ErrNoRows
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return IncidentReview{}, err
+	}
+	return s.IncidentReviewByID(ctx, id)
+}
+
+func (s *Store) UpdateIncidentDraft(ctx context.Context, id uuid.UUID, draft string, actorID uuid.UUID) (IncidentReview, error) {
+	review, err := s.updateIncidentStatus(ctx, id, "awaiting_review", nil, nil, &draft, false)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	_ = s.CreateIncidentAuditEvent(ctx, id, "user", &actorID, "draft_updated", map[string]any{"length": len(draft)})
+	return review, nil
+}
+
+func (s *Store) ApproveIncidentReview(ctx context.Context, id uuid.UUID, finalMessage string, actorID uuid.UUID) (IncidentReview, error) {
+	review, err := s.updateIncidentStatus(ctx, id, "approved", &actorID, &finalMessage, nil, false)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	_ = s.CreateIncidentAuditEvent(ctx, id, "user", &actorID, "approved", map[string]any{"length": len(finalMessage)})
+	return review, nil
+}
+
+func (s *Store) RejectIncidentReview(ctx context.Context, id uuid.UUID, actorID uuid.UUID) (IncidentReview, error) {
+	review, err := s.updateIncidentStatus(ctx, id, "rejected", nil, nil, nil, false)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	_ = s.CreateIncidentAuditEvent(ctx, id, "user", &actorID, "rejected", map[string]any{})
+	return review, nil
+}
+
+func (s *Store) MarkIncidentBroadcasted(ctx context.Context, id uuid.UUID) (IncidentReview, error) {
+	return s.updateIncidentStatus(ctx, id, "broadcasted", nil, nil, nil, true)
+}
+
+type incidentReviewScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanIncidentReview(row incidentReviewScanner) (IncidentReview, error) {
+	var review IncidentReview
+	var alertEventIDText, alertRuleIDText string
+	err := row.Scan(&review.ID, &alertEventIDText, &alertRuleIDText, &review.Status, &review.Severity, &review.Title, &review.Summary, &review.Confidence, &review.DraftMessage, &review.FinalMessage, &review.AssignedTo, &review.ApprovedBy, &review.ApprovedAt, &review.BroadcastedAt, &review.CreatedAt, &review.UpdatedAt)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	return hydrateIncidentIDs(review, alertEventIDText, alertRuleIDText)
+}
+
+func hydrateIncidentIDs(review IncidentReview, alertEventIDText, alertRuleIDText string) (IncidentReview, error) {
+	if alertEventIDText != "" {
+		id, err := uuid.Parse(alertEventIDText)
+		if err != nil {
+			return IncidentReview{}, err
+		}
+		review.AlertEventID = &id
+	}
+	if alertRuleIDText != "" {
+		id, err := uuid.Parse(alertRuleIDText)
+		if err != nil {
+			return IncidentReview{}, err
+		}
+		review.AlertRuleID = &id
+	}
+	return review, nil
+}
+
+func (s *Store) updateIncidentStatus(ctx context.Context, id uuid.UUID, status string, approvedBy *uuid.UUID, finalMessage *string, draftMessage *string, broadcasted bool) (IncidentReview, error) {
+	var review IncidentReview
+	var alertEventIDText, alertRuleIDText string
+	err := s.pool.QueryRow(ctx, `
+		update incident_reviews
+		set status = $2,
+		    approved_by = coalesce($3, approved_by),
+		    approved_at = case when $2 = 'approved' then now() else approved_at end,
+		    broadcasted_at = case when $6 then now() else broadcasted_at end,
+		    final_message = coalesce($4, final_message),
+		    draft_message = coalesce($5, draft_message),
+		    updated_at = now()
+		where id = $1
+		returning id, coalesce(alert_event_id::text, ''), coalesce(alert_rule_id::text, ''), status, severity, title, summary, confidence, draft_message, final_message, assigned_to, approved_by, approved_at, broadcasted_at, created_at, updated_at
+	`, id, status, approvedBy, finalMessage, draftMessage, broadcasted).Scan(
+		&review.ID, &alertEventIDText, &alertRuleIDText, &review.Status, &review.Severity, &review.Title, &review.Summary, &review.Confidence, &review.DraftMessage, &review.FinalMessage, &review.AssignedTo, &review.ApprovedBy, &review.ApprovedAt, &review.BroadcastedAt, &review.CreatedAt, &review.UpdatedAt,
+	)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	return hydrateIncidentIDs(review, alertEventIDText, alertRuleIDText)
+}
+
+func (s *Store) ListIncidentSteps(ctx context.Context, incidentID uuid.UUID) ([]IncidentInvestigationStep, error) {
+	rows, err := s.pool.Query(ctx, `
+		select id, incident_review_id, step_type, tool_name, query_or_command, result_summary, raw_result_json, created_at
+		from incident_investigation_steps
+		where incident_review_id = $1
+		order by created_at asc
+	`, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	steps := []IncidentInvestigationStep{}
+	for rows.Next() {
+		var step IncidentInvestigationStep
+		if err := rows.Scan(&step.ID, &step.IncidentReviewID, &step.StepType, &step.ToolName, &step.QueryOrCommand, &step.ResultSummary, &step.RawResultJSON, &step.CreatedAt); err != nil {
+			return nil, err
+		}
+		steps = append(steps, step)
+	}
+	return steps, rows.Err()
+}
+
+func (s *Store) CreateIncidentAuditEvent(ctx context.Context, incidentID uuid.UUID, actorType string, actorID *uuid.UUID, action string, details map[string]any) error {
+	if details == nil {
+		details = map[string]any{}
+	}
+	_, err := s.pool.Exec(ctx, `
+		insert into incident_audit_events (id, incident_review_id, actor_type, actor_id, action, details_json, created_at)
+		values ($1, $2, $3, $4, $5, $6, now())
+	`, uuid.New(), incidentID, actorType, actorID, action, details)
+	return err
+}
+
+func (s *Store) ListIncidentAuditEvents(ctx context.Context, incidentID uuid.UUID) ([]IncidentAuditEvent, error) {
+	rows, err := s.pool.Query(ctx, `
+		select id, incident_review_id, actor_type, actor_id, action, details_json, created_at
+		from incident_audit_events
+		where incident_review_id = $1
+		order by created_at asc
+	`, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []IncidentAuditEvent{}
+	for rows.Next() {
+		var event IncidentAuditEvent
+		if err := rows.Scan(&event.ID, &event.IncidentReviewID, &event.ActorType, &event.ActorID, &event.Action, &event.DetailsJSON, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 func NotFound(err error) bool {
 	return err == pgx.ErrNoRows
 }
@@ -540,9 +832,52 @@ create table if not exists alert_events (
   resolved_at timestamptz
 );
 
+create table if not exists incident_reviews (
+  id uuid primary key,
+  alert_event_id uuid references alert_events(id),
+  alert_rule_id uuid references alert_rules(id),
+  status text not null check (status in ('pending_investigation', 'investigating', 'awaiting_review', 'approved', 'broadcasted', 'rejected', 'failed', 'closed')),
+  severity text not null,
+  title text not null,
+  summary text not null default '',
+  confidence text not null default '',
+  draft_message text not null default '',
+  final_message text not null default '',
+  assigned_to uuid references users(id),
+  approved_by uuid references users(id),
+  approved_at timestamptz,
+  broadcasted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists incident_investigation_steps (
+  id uuid primary key,
+  incident_review_id uuid not null references incident_reviews(id) on delete cascade,
+  step_type text not null,
+  tool_name text not null default '',
+  query_or_command text not null default '',
+  result_summary text not null default '',
+  raw_result_json jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists incident_audit_events (
+  id uuid primary key,
+  incident_review_id uuid not null references incident_reviews(id) on delete cascade,
+  actor_type text not null,
+  actor_id uuid references users(id),
+  action text not null,
+  details_json jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
 alter table users enable row level security;
 alter table dashboards enable row level security;
 alter table panels enable row level security;
 alter table alert_rules enable row level security;
 alter table alert_events enable row level security;
+alter table incident_reviews enable row level security;
+alter table incident_investigation_steps enable row level security;
+alter table incident_audit_events enable row level security;
 `

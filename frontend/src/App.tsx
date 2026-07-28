@@ -6,6 +6,7 @@ import { queryInstant, queryRange, type PrometheusMatrixResult, type PrometheusV
 import { AlertsView } from "./components/alerts/AlertsView";
 import { LoginView } from "./components/auth/LoginView";
 import { DashboardManager } from "./components/dashboards/DashboardManager";
+import { IncidentReviewsView } from "./components/incidents/IncidentReviewsView";
 import { MetricCard } from "./components/overview/MetricCard";
 import { Panel } from "./components/overview/Panel";
 import { QueryWorkbench } from "./components/overview/QueryWorkbench";
@@ -51,7 +52,7 @@ const panels: PanelDefinition[] = [
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(() => readStoredSession());
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [activeView, setActiveView] = useState<"overview" | "dashboards" | "alerts">("overview");
+  const [activeView, setActiveView] = useState<"overview" | "dashboards" | "alerts" | "incidents">("overview");
   const [health, setHealth] = useState<Loadable<BackendHealth>>({ status: "loading" });
   const [cards, setCards] = useState<Loadable<CardMetrics>>({ status: "loading" });
   const [panelData, setPanelData] = useState<Record<string, Loadable<PrometheusMatrixResult[]>>>(
@@ -142,6 +143,9 @@ export function App() {
         <button type="button" className={activeView === "alerts" ? "active" : ""} onClick={() => setActiveView("alerts")}>
           Alerts
         </button>
+        <button type="button" className={activeView === "incidents" ? "active" : ""} onClick={() => setActiveView("incidents")}>
+          Incidents
+        </button>
       </nav>
 
       {activeView === "overview" && (
@@ -190,6 +194,7 @@ export function App() {
 
       {activeView === "dashboards" && <DashboardManager token={session.token} user={session.user} />}
       {activeView === "alerts" && <AlertsView token={session.token} user={session.user} />}
+      {activeView === "incidents" && <IncidentReviewsView token={session.token} user={session.user} />}
     </main>
   );
 }

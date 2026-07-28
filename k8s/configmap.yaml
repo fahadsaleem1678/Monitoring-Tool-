@@ -10,4 +10,8 @@ data:
   PROMETHEUS_TIMEOUT_SECONDS: "10"
   PROMETHEUS_SMOKE_QUERY: "up"
   ALERT_EVAL_INTERVAL_SECONDS: "15"
+  BACKEND_URL: "http://monitoring-tool-backend:8080"
+  PROMETHEUS_MCP_URL: "http://prometheus-mcp:8091"
+  KUBERNETES_MCP_URL: "http://kubernetes-mcp:8091"
+  AGENT_POLL_INTERVAL_SECONDS: "15"
   LOG_LEVEL: "info"
