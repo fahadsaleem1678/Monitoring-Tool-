@@ -1,7 +1,8 @@
 import os
+from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 app = FastAPI()
 SERVICE_HOST = os.getenv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
@@ -25,19 +26,91 @@ async def kubernetes_pods(payload: dict):
         "tool": "kubernetes.pods",
         "summary": f"Kubernetes returned {len(items)} pod(s)",
         "data": {
-            "pods": [
-                {
-                    "namespace": item.get("metadata", {}).get("namespace", ""),
-                    "name": item.get("metadata", {}).get("name", ""),
-                    "phase": item.get("status", {}).get("phase", ""),
-                }
-                for item in items[:50]
-            ]
+            "pods": [summarize_pod(item) for item in items[:50]]
         },
     }
 
 
+@app.post("/tools/kubernetes.events")
+async def kubernetes_events(payload: dict):
+    namespace = str(payload.get("namespace", "")).strip()
+    path = f"/api/v1/namespaces/{namespace}/events" if namespace else "/api/v1/events"
+    body = await kubernetes_get(path)
+    items = body.get("items", [])
+    events = [
+        {
+            "namespace": item.get("metadata", {}).get("namespace", ""),
+            "name": item.get("metadata", {}).get("name", ""),
+            "reason": item.get("reason", ""),
+            "message": item.get("message", ""),
+            "type": item.get("type", ""),
+            "last_timestamp": item.get("lastTimestamp") or item.get("eventTime") or item.get("metadata", {}).get("creationTimestamp", ""),
+        }
+        for item in items[-20:]
+    ]
+    return {
+        "tool": "kubernetes.events",
+        "summary": f"Kubernetes returned {len(items)} event(s)",
+        "data": {"events": events},
+    }
+
+
+@app.post("/tools/kubernetes.logs")
+async def kubernetes_logs(payload: dict):
+    namespace = str(payload.get("namespace", "")).strip()
+    pod = str(payload.get("pod", "")).strip()
+    if not namespace or not pod:
+        raise HTTPException(status_code=400, detail="namespace and pod are required")
+    tail_lines = int(payload.get("tail_lines", 80))
+    if tail_lines <= 0 or tail_lines > 200:
+        tail_lines = 80
+    params = urlencode({"tailLines": tail_lines})
+    path = f"/api/v1/namespaces/{namespace}/pods/{pod}/log?{params}"
+    try:
+        text = await kubernetes_get_text(path)
+    except httpx.HTTPStatusError:
+        previous_params = urlencode({"tailLines": tail_lines, "previous": "true"})
+        text = await kubernetes_get_text(f"/api/v1/namespaces/{namespace}/pods/{pod}/log?{previous_params}")
+    lines = [line for line in text.splitlines() if line.strip()]
+    preview = "\n".join(lines[-20:])
+    return {
+        "tool": "kubernetes.logs",
+        "summary": f"Kubernetes returned {len(lines)} log line(s) for {pod}",
+        "data": {"namespace": namespace, "pod": pod, "preview": preview},
+    }
+
+
+def summarize_pod(item: dict) -> dict:
+    statuses = item.get("status", {}).get("containerStatuses", [])
+    waiting_reasons = []
+    restart_count = 0
+    for status in statuses:
+        restart_count += int(status.get("restartCount", 0))
+        waiting = status.get("state", {}).get("waiting")
+        if waiting:
+            reason = waiting.get("reason", "")
+            if reason:
+                waiting_reasons.append(reason)
+    return {
+        "namespace": item.get("metadata", {}).get("namespace", ""),
+        "name": item.get("metadata", {}).get("name", ""),
+        "phase": item.get("status", {}).get("phase", ""),
+        "restart_count": restart_count,
+        "waiting_reasons": waiting_reasons,
+    }
+
+
 async def kubernetes_get(path: str) -> dict:
+    response = await kubernetes_request(path)
+    return response.json()
+
+
+async def kubernetes_get_text(path: str) -> str:
+    response = await kubernetes_request(path)
+    return response.text
+
+
+async def kubernetes_request(path: str) -> httpx.Response:
     with open(TOKEN_PATH, encoding="utf-8") as token_file:
         token = token_file.read().strip()
     verify = CA_PATH if os.path.exists(CA_PATH) else True
@@ -47,4 +120,4 @@ async def kubernetes_get(path: str) -> dict:
             headers={"Authorization": f"Bearer {token}"},
         )
         response.raise_for_status()
-        return response.json()
+        return response

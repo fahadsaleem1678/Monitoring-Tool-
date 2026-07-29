@@ -21,3 +21,18 @@ class KubernetesMCPClient:
             response = await client.post(f"{self.base_url}/tools/kubernetes.pods", json={"namespace": namespace})
             response.raise_for_status()
             return response.json()
+
+    async def events(self, namespace: str = "") -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{self.base_url}/tools/kubernetes.events", json={"namespace": namespace})
+            response.raise_for_status()
+            return response.json()
+
+    async def logs(self, namespace: str, pod: str, tail_lines: int = 80) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{self.base_url}/tools/kubernetes.logs",
+                json={"namespace": namespace, "pod": pod, "tail_lines": tail_lines},
+            )
+            response.raise_for_status()
+            return response.json()

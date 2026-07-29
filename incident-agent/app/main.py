@@ -6,7 +6,7 @@ from prometheus_client import Counter, Histogram, generate_latest
 from starlette.responses import Response
 
 from app.backend_client import BackendClient
-from app.investigator import build_draft
+from app.investigator import build_draft, build_related_promql_queries, choose_pod_for_logs, extract_alert_query, extract_label_value
 from app.mcp_clients import KubernetesMCPClient, PrometheusMCPClient
 
 app = FastAPI()
@@ -39,26 +39,54 @@ async def investigate_once():
             claimed = await backend.claim(incident["id"])
             evidence = []
             try:
-                prom_result = await prometheus.instant_query("sum(up == 0)")
-                evidence.append(
-                    {
-                        "step_type": "promql",
-                        "tool_name": "prometheus",
-                        "query_or_command": "sum(up == 0)",
-                        "result_summary": prom_result.get("summary", "Prometheus query completed"),
-                        "raw_result_json": prom_result,
-                    }
-                )
-                pods_result = await kubernetes.pods("")
+                alert_query = extract_alert_query(claimed) or "sum(up == 0)"
+                namespace = extract_label_value(alert_query, "namespace")
+                queries = [alert_query] + build_related_promql_queries(alert_query)
+                for query in queries[:4]:
+                    prom_result = await prometheus.instant_query(query)
+                    evidence.append(
+                        {
+                            "step_type": "promql",
+                            "tool_name": "prometheus",
+                            "query_or_command": query,
+                            "result_summary": prom_result.get("summary", "Prometheus query completed"),
+                            "raw_result_json": prom_result,
+                        }
+                    )
+                pods_result = await kubernetes.pods(namespace)
                 evidence.append(
                     {
                         "step_type": "kubernetes",
-                        "tool_name": "kubernetes",
-                        "query_or_command": "kubectl get pods -A",
+                        "tool_name": "kubernetes-pods",
+                        "query_or_command": f"kubectl get pods -n {namespace}" if namespace else "kubectl get pods -A",
                         "result_summary": pods_result.get("summary", "Kubernetes pod query completed"),
                         "raw_result_json": pods_result,
                     }
                 )
+                events_result = await kubernetes.events(namespace)
+                evidence.append(
+                    {
+                        "step_type": "kubernetes",
+                        "tool_name": "kubernetes-events",
+                        "query_or_command": f"kubectl get events -n {namespace} --sort-by=.lastTimestamp"
+                        if namespace
+                        else "kubectl get events -A --sort-by=.lastTimestamp",
+                        "result_summary": events_result.get("summary", "Kubernetes event query completed"),
+                        "raw_result_json": events_result,
+                    }
+                )
+                log_namespace, log_pod = choose_pod_for_logs(pods_result)
+                if log_namespace and log_pod:
+                    logs_result = await kubernetes.logs(log_namespace, log_pod)
+                    evidence.append(
+                        {
+                            "step_type": "kubernetes",
+                            "tool_name": "kubernetes-logs",
+                            "query_or_command": f"kubectl logs {log_pod} -n {log_namespace} --tail=80",
+                            "result_summary": logs_result.get("summary", "Kubernetes log query completed"),
+                            "raw_result_json": logs_result,
+                        }
+                    )
                 await backend.complete(claimed["id"], build_draft(claimed, evidence))
                 investigations_completed.inc()
             except Exception:
