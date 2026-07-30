@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: monitoring-tool-frontend:0.1.0
+          image: monitoring-tool-frontend:0.1.1
           imagePullPolicy: Never
           ports:
             - name: http
