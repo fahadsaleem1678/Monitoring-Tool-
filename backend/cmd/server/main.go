@@ -90,6 +90,7 @@ func main() {
 	mux.Handle("PUT /api/v1/incidents/{id}/draft", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.UpdateDraft))))
 	mux.Handle("POST /api/v1/incidents/{id}/approve", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.Approve))))
 	mux.Handle("POST /api/v1/incidents/{id}/reject", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.Reject))))
+	mux.Handle("POST /api/v1/incidents/{id}/regenerate", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.Regenerate))))
 	mux.Handle("POST /api/v1/incidents/{id}/broadcast", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(incidentHandler.Broadcast))))
 	mux.HandleFunc("GET /api/v1/agent/incidents", incidentHandler.AgentList)
 	mux.HandleFunc("POST /api/v1/agent/incidents/{id}/claim", incidentHandler.AgentClaim)

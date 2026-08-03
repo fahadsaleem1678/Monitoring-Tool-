@@ -22,6 +22,7 @@ Phase 2:
 - Dashboard list/detail UI with saved PromQL panels.
 - Docker Compose PostgreSQL for local development.
 - Migration files for app schema.
+- AI incident reviews with read-only MCP evidence and local Ollama draft generation.
 
 ## Prerequisites
 
@@ -55,6 +56,112 @@ Default local login:
 admin / admin123
 viewer / viewer123
 ```
+
+## Incident Agent LLM Mode
+
+The incident agent defaults to local Ollama:
+
+```text
+LLM_PROVIDER=ollama
+OLLAMA_URL=http://host.docker.internal:11434
+OLLAMA_MODEL=qwen2.5:7b
+```
+
+For a local Ollama demo, start Ollama on the host and pull the model:
+
+```powershell
+ollama pull qwen2.5:7b
+ollama serve
+```
+
+The agent still owns the investigation sequence. It collects Prometheus and Kubernetes evidence through read-only MCP endpoints, then asks the LLM to produce a summary, probable cause, confidence, suggested checks, and a Slack draft. Slack broadcast still requires an admin to approve the draft first.
+
+Safety limits:
+
+```text
+MAX_PROMETHEUS_QUERY_RANGE_MINUTES=60
+MAX_LOG_LINES=80
+```
+
+OpenAI can be used instead by setting:
+
+```text
+LLM_PROVIDER=openai
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+## Official Prometheus MCP
+
+The Kubernetes manifests include the current custom Prometheus MCP service and a parallel official MCP service:
+
+```text
+prometheus-mcp:8091            current MVP HTTP shim
+prometheus-mcp-official:8080   official ghcr.io/pab1it0/prometheus-mcp-server
+```
+
+The agent uses the MVP shim by default:
+
+```text
+PROMETHEUS_MCP_MODE=mvp
+```
+
+After the official pod is healthy, switch the agent to it:
+
+```bash
+kubectl -n monitoring-tool patch configmap monitoring-tool-config \
+  --type merge \
+  -p '{"data":{"PROMETHEUS_MCP_MODE":"official"}}'
+
+kubectl rollout restart deployment/incident-agent -n monitoring-tool
+```
+
+The official server is configured for HTTP stateless MCP and exposes read-only tools such as instant query, range query, targets, metric metadata, and metric listing.
+
+Debug the active Prometheus MCP path through the incident agent:
+
+```bash
+kubectl -n monitoring-tool port-forward svc/incident-agent 8090:8090
+curl http://localhost:8090/debug/prometheus-mcp
+curl http://localhost:8090/debug/prometheus-mcp-official
+```
+
+`/debug/prometheus-mcp` checks the currently configured mode. `/debug/prometheus-mcp-official` forces the official MCP path and reports whether it can list tools and run a simple `up` query.
+
+## Official Kubernetes MCP
+
+The Kubernetes manifests also include the current custom Kubernetes MCP service and a parallel official MCP service:
+
+```text
+kubernetes-mcp:8091            current MVP HTTP shim
+kubernetes-mcp-official:8080   official containers/kubernetes-mcp-server
+```
+
+The agent uses the MVP shim by default:
+
+```text
+KUBERNETES_MCP_MODE=mvp
+```
+
+After the official pod is healthy, smoke test it through the incident agent:
+
+```bash
+kubectl -n monitoring-tool port-forward svc/incident-agent 8090:8090
+curl http://localhost:8090/debug/kubernetes-mcp
+curl http://localhost:8090/debug/kubernetes-mcp-official
+```
+
+Switch the agent to official Kubernetes MCP:
+
+```bash
+kubectl -n monitoring-tool patch configmap monitoring-tool-config \
+  --type merge \
+  -p '{"data":{"KUBERNETES_MCP_MODE":"official"}}'
+
+kubectl rollout restart deployment/incident-agent -n monitoring-tool
+```
+
+Official Kubernetes MCP is deployed read-only, stateless, core-only, and with multi-cluster disabled. The agent keeps MVP fallback enabled.
 
 ## Start PostgreSQL
 

@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-mcp-official
+  namespace: monitoring-tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-mcp-official
+  template:
+    metadata:
+      labels:
+        app: prometheus-mcp-official
+    spec:
+      containers:
+        - name: prometheus-mcp-official
+          image: ghcr.io/pab1it0/prometheus-mcp-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PROMETHEUS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: monitoring-tool-config
+                  key: PROMETHEUS_URL
+            - name: PROMETHEUS_MCP_SERVER_TRANSPORT
+              value: "http"
+            - name: PROMETHEUS_MCP_BIND_HOST
+              value: "0.0.0.0"
+            - name: PROMETHEUS_MCP_BIND_PORT
+              value: "8080"
+            - name: PROMETHEUS_MCP_STATELESS_HTTP
+              value: "true"
+            - name: PROMETHEUS_REQUEST_TIMEOUT
+              value: "15"
+            - name: PROMETHEUS_DISABLE_LINKS
+              value: "true"
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-mcp-official
+  namespace: monitoring-tool
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus-mcp-official
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

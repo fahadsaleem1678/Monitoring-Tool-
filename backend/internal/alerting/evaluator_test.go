@@ -47,7 +47,7 @@ func TestEvaluatePrometheusResultUsesLowestBreachingValueForLessThan(t *testing.
 	}
 }
 
-func TestEvaluatePrometheusResultTreatsEmptyVectorAsResolved(t *testing.T) {
+func TestEvaluatePrometheusResultTreatsEmptyVectorAsNoData(t *testing.T) {
 	data := json.RawMessage(`{"resultType": "vector", "result": []}`)
 
 	result, err := evaluatePrometheusResult(data, ">", 0)
@@ -56,6 +56,9 @@ func TestEvaluatePrometheusResultTreatsEmptyVectorAsResolved(t *testing.T) {
 	}
 	if result.Firing {
 		t.Fatal("expected empty vector to be resolved")
+	}
+	if !result.NoData {
+		t.Fatal("expected empty vector to be marked no data")
 	}
 	if result.Value != nil {
 		t.Fatalf("value = %v, want nil", result.Value)

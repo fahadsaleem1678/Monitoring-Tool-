@@ -115,6 +115,11 @@ func (e *Evaluator) evaluateRule(ctx context.Context, now time.Time, rule store.
 		return
 	}
 
+	if result.NoData && hasOpenEvent {
+		e.logger.Warn("alert query returned no data while alert is open; keeping alert firing", "rule_id", rule.ID.String(), "rule", rule.Name)
+		return
+	}
+
 	e.clearPending(rule.ID)
 	if hasOpenEvent {
 		e.resolveOpenEvent(ctx, rule, openEvent, result.Value)
@@ -212,12 +217,16 @@ func (e *Evaluator) sendSlack(ctx context.Context, message string, rule store.Al
 type evaluationResult struct {
 	Firing bool
 	Value  *float64
+	NoData bool
 }
 
 func evaluatePrometheusResult(data json.RawMessage, operator string, threshold float64) (evaluationResult, error) {
 	values, err := sampleValues(data)
 	if err != nil {
 		return evaluationResult{}, err
+	}
+	if len(values) == 0 {
+		return evaluationResult{NoData: true}, nil
 	}
 
 	var selected *float64

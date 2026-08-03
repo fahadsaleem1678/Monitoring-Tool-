@@ -19,7 +19,7 @@ class BackendClient:
             return response.json()["incident"]
 
     async def complete(self, incident_id: str, payload: dict) -> dict:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 f"{self.base_url}/api/v1/agent/incidents/{incident_id}/complete",
                 headers={**self.headers, "Content-Type": "application/json"},

@@ -8,5 +8,7 @@ resources:
   - frontend.yaml
   - incident-agent.yaml
   - prometheus-mcp.yaml
+  - prometheus-mcp-official.yaml
   - kubernetes-mcp.yaml
+  - kubernetes-mcp-official.yaml
   - ingress.yaml

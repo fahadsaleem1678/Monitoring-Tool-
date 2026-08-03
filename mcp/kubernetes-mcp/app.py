@@ -55,6 +55,40 @@ async def kubernetes_events(payload: dict):
     }
 
 
+@app.post("/tools/kubernetes.deployments")
+async def kubernetes_deployments(payload: dict):
+    namespace = str(payload.get("namespace", "")).strip()
+    path = f"/apis/apps/v1/namespaces/{namespace}/deployments" if namespace else "/apis/apps/v1/deployments"
+    body = await kubernetes_get(path)
+    items = body.get("items", [])
+    deployments = [
+        {
+            "namespace": item.get("metadata", {}).get("namespace", ""),
+            "name": item.get("metadata", {}).get("name", ""),
+            "replicas": item.get("status", {}).get("replicas", 0),
+            "ready_replicas": item.get("status", {}).get("readyReplicas", 0),
+            "updated_replicas": item.get("status", {}).get("updatedReplicas", 0),
+            "unavailable_replicas": item.get("status", {}).get("unavailableReplicas", 0),
+            "conditions": [
+                {
+                    "type": condition.get("type", ""),
+                    "status": condition.get("status", ""),
+                    "reason": condition.get("reason", ""),
+                    "message": condition.get("message", ""),
+                }
+                for condition in item.get("status", {}).get("conditions", [])
+            ],
+        }
+        for item in items[:50]
+    ]
+    unavailable = [item for item in deployments if int(item.get("unavailable_replicas") or 0) > 0]
+    return {
+        "tool": "kubernetes.deployments",
+        "summary": f"Kubernetes returned {len(items)} deployment(s), {len(unavailable)} with unavailable replicas",
+        "data": {"deployments": deployments},
+    }
+
+
 @app.post("/tools/kubernetes.logs")
 async def kubernetes_logs(payload: dict):
     namespace = str(payload.get("namespace", "")).strip()

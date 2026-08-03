@@ -92,6 +92,15 @@ export async function rejectIncident(token: string, id: string): Promise<Inciden
   return body.incident;
 }
 
+export async function regenerateIncident(token: string, id: string): Promise<IncidentReview> {
+  const response = await fetch(`/api/v1/incidents/${id}/regenerate`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  const body = await readJSON<{ incident: IncidentReview }>(response);
+  return body.incident;
+}
+
 export async function broadcastIncident(token: string, id: string): Promise<IncidentReview> {
   const response = await fetch(`/api/v1/incidents/${id}/broadcast`, {
     method: "POST",

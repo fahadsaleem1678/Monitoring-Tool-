@@ -4,6 +4,7 @@ import {
   broadcastIncident,
   getIncident,
   listIncidents,
+  regenerateIncident,
   rejectIncident,
   updateIncidentDraft,
   type IncidentReview
@@ -26,6 +27,15 @@ export function IncidentReviewsView({ token, user }: Props) {
   const [draft, setDraft] = useState("");
   const [action, setAction] = useState<Loadable<string> | null>(null);
   const isAdmin = user.role === "admin";
+  const selectedIncident = selected?.status === "ready" ? selected.data : null;
+  const steps = selectedIncident?.steps ?? [];
+  const llmStep = steps.find((step) => step.step_type === "llm");
+  const llmDetails: Record<string, unknown> = llmStep?.raw_result_json ?? {};
+  const probableCause = stringValue(llmDetails.probable_cause) || "Pending LLM investigation";
+  const evidenceSummary = stringList(llmDetails.evidence_summary);
+  const suggestedNextChecks = stringList(llmDetails.suggested_next_checks);
+  const prometheusSteps = steps.filter((step) => step.step_type === "promql");
+  const kubernetesSteps = steps.filter((step) => step.step_type === "kubernetes");
 
   async function refreshList(selectFirst = false) {
     setIncidents({ status: "loading" });
@@ -101,6 +111,22 @@ export function IncidentReviewsView({ token, user }: Props) {
     }
   }
 
+  async function regenerateDraft() {
+    if (selected?.status !== "ready") {
+      return;
+    }
+    setAction({ status: "loading" });
+    try {
+      const incident = await regenerateIncident(token, selected.data.id);
+      setSelected({ status: "ready", data: incident });
+      setDraft("");
+      setAction({ status: "ready", data: "Regeneration queued" });
+      await refreshList();
+    } catch (error) {
+      setAction({ status: "error", message: error instanceof Error ? error.message : "Regeneration failed" });
+    }
+  }
+
   async function sendBroadcast() {
     if (selected?.status !== "ready") {
       return;
@@ -144,7 +170,7 @@ export function IncidentReviewsView({ token, user }: Props) {
             >
               <strong>{incident.title}</strong>
               <span>
-                {incident.severity} · {incident.status}
+                {incident.severity} - {incident.status}
               </span>
               <small>{new Date(incident.created_at).toLocaleString()}</small>
             </button>
@@ -162,7 +188,7 @@ export function IncidentReviewsView({ token, user }: Props) {
             <header className="detail-header">
               <div>
                 <p className="eyebrow">
-                  {selected.data.severity} · {selected.data.status}
+                  {selected.data.severity} - {selected.data.status}
                 </p>
                 <h2>{selected.data.title}</h2>
                 <p>{selected.data.summary || "Investigation summary will appear here after the agent finishes."}</p>
@@ -171,7 +197,28 @@ export function IncidentReviewsView({ token, user }: Props) {
             </header>
 
             <section className="incident-section">
-              <h2>Slack Draft</h2>
+              <h2>AI Summary</h2>
+              <div className="incident-ai-grid">
+                <div>
+                  <span>Probable cause</span>
+                  <strong>{probableCause}</strong>
+                </div>
+                <div>
+                  <span>Confidence</span>
+                  <strong>{selected.data.confidence || "pending"}</strong>
+                </div>
+              </div>
+              {evidenceSummary.length > 0 && (
+                <div className="incident-facts">
+                  {evidenceSummary.map((item) => (
+                    <p key={item}>{item}</p>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="incident-section">
+              <h2>Draft Slack Message</h2>
               <textarea value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!isAdmin} />
               {isAdmin && (
                 <div className="incident-actions">
@@ -180,6 +227,9 @@ export function IncidentReviewsView({ token, user }: Props) {
                   </button>
                   <button type="button" onClick={() => void approveDraft()}>
                     Approve
+                  </button>
+                  <button type="button" onClick={() => void regenerateDraft()}>
+                    Regenerate
                   </button>
                   <button type="button" onClick={() => void sendBroadcast()}>
                     Broadcast
@@ -192,17 +242,49 @@ export function IncidentReviewsView({ token, user }: Props) {
             </section>
 
             <section className="incident-section">
-              <h2>Reasoning Log</h2>
-              {(selected.data.steps ?? []).length === 0 && (
-                <div className="panel-message compact">No agent steps recorded yet</div>
-              )}
-              {(selected.data.steps ?? []).map((step) => (
+              <h2>Evidence Trail</h2>
+              {steps.length === 0 && <div className="panel-message compact">No agent steps recorded yet</div>}
+              {steps.map((step) => (
                 <article className="incident-step" key={step.id}>
-                  <strong>{step.tool_name || step.step_type}</strong>
+                  <div className="incident-step-header">
+                    <strong>{step.tool_name || step.step_type}</strong>
+                    <span className={`mcp-source-badge ${mcpSource(step)}`}>{mcpSourceLabel(step)}</span>
+                  </div>
                   <code>{step.query_or_command}</code>
                   <p>{step.result_summary}</p>
+                  <details>
+                    <summary>Raw evidence</summary>
+                    <pre>{JSON.stringify(step.raw_result_json, null, 2)}</pre>
+                  </details>
                 </article>
               ))}
+            </section>
+
+            <section className="incident-section">
+              <h2>Prometheus Queries Used</h2>
+              {prometheusSteps.length === 0 && <div className="panel-message compact">No Prometheus evidence yet</div>}
+              {prometheusSteps.map((step) => (
+                <code className="incident-check" key={step.id}>
+                  {step.query_or_command}
+                </code>
+              ))}
+            </section>
+
+            <section className="incident-section">
+              <h2>Kubernetes Checks Used</h2>
+              {kubernetesSteps.length === 0 && <div className="panel-message compact">No Kubernetes evidence yet</div>}
+              {kubernetesSteps.map((step) => (
+                <code className="incident-check" key={step.id}>
+                  {step.query_or_command}
+                </code>
+              ))}
+              {suggestedNextChecks.length > 0 && (
+                <div className="incident-facts">
+                  {suggestedNextChecks.map((check) => (
+                    <p key={check}>{check}</p>
+                  ))}
+                </div>
+              )}
             </section>
 
             <section className="incident-section">
@@ -223,4 +305,45 @@ export function IncidentReviewsView({ token, user }: Props) {
       </section>
     </section>
   );
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
+function mcpSource(step: { tool_name: string; raw_result_json: Record<string, unknown> }): "official" | "fallback" | "mvp" | "llm" {
+  if (step.tool_name.includes(":")) {
+    return "llm";
+  }
+  if ("official_mcp_fallback" in step.raw_result_json) {
+    return "fallback";
+  }
+  if (step.tool_name.startsWith("official-")) {
+    return "official";
+  }
+  return "mvp";
+}
+
+function mcpSourceLabel(step: { tool_name: string; raw_result_json: Record<string, unknown> }): string {
+  const source = mcpSource(step);
+  if (source === "official") {
+    return "Official MCP";
+  }
+  if (source === "fallback") {
+    return "MVP fallback";
+  }
+  if (source === "llm") {
+    return "LLM";
+  }
+  return "MVP MCP";
 }

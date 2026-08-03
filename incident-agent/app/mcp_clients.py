@@ -1,38 +1,4 @@
-import httpx
+from app.mcp_kubernetes_client import KubernetesMCPClient
+from app.mcp_prometheus_client import PrometheusMCPClient
 
-
-class PrometheusMCPClient:
-    def __init__(self, base_url: str):
-        self.base_url = base_url.rstrip("/")
-
-    async def instant_query(self, query: str) -> dict:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(f"{self.base_url}/tools/prometheus.query", json={"query": query})
-            response.raise_for_status()
-            return response.json()
-
-
-class KubernetesMCPClient:
-    def __init__(self, base_url: str):
-        self.base_url = base_url.rstrip("/")
-
-    async def pods(self, namespace: str = "") -> dict:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(f"{self.base_url}/tools/kubernetes.pods", json={"namespace": namespace})
-            response.raise_for_status()
-            return response.json()
-
-    async def events(self, namespace: str = "") -> dict:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(f"{self.base_url}/tools/kubernetes.events", json={"namespace": namespace})
-            response.raise_for_status()
-            return response.json()
-
-    async def logs(self, namespace: str, pod: str, tail_lines: int = 80) -> dict:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{self.base_url}/tools/kubernetes.logs",
-                json={"namespace": namespace, "pod": pod, "tail_lines": tail_lines},
-            )
-            response.raise_for_status()
-            return response.json()
+__all__ = ["KubernetesMCPClient", "PrometheusMCPClient"]

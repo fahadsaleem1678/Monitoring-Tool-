@@ -425,6 +425,9 @@ func (s *Store) DeleteAlertRule(ctx context.Context, id uuid.UUID) error {
 	if _, err := tx.Exec(ctx, `update alert_events set rule_id = null where rule_id = $1`, id); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `update incident_reviews set alert_rule_id = null where alert_rule_id = $1`, id); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `delete from alert_rules where id = $1`, id)
 	if err != nil {
 		return err
@@ -650,6 +653,48 @@ func (s *Store) RejectIncidentReview(ctx context.Context, id uuid.UUID, actorID 
 	}
 	_ = s.CreateIncidentAuditEvent(ctx, id, "user", &actorID, "rejected", map[string]any{})
 	return review, nil
+}
+
+func (s *Store) RegenerateIncidentReview(ctx context.Context, id uuid.UUID, actorID uuid.UUID) (IncidentReview, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `delete from incident_investigation_steps where incident_review_id = $1`, id); err != nil {
+		return IncidentReview{}, err
+	}
+	tag, err := tx.Exec(ctx, `
+		update incident_reviews
+		set status = 'pending_investigation',
+		    summary = '',
+		    confidence = '',
+		    draft_message = '',
+		    final_message = '',
+		    assigned_to = null,
+		    approved_by = null,
+		    approved_at = null,
+		    broadcasted_at = null,
+		    updated_at = now()
+		where id = $1
+	`, id)
+	if err != nil {
+		return IncidentReview{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return IncidentReview{}, pgx.ErrNoRows
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into incident_audit_events (id, incident_review_id, actor_type, actor_id, action, details_json, created_at)
+		values ($1, $2, 'user', $3, 'regeneration_requested', '{}', now())
+	`, uuid.New(), id, actorID); err != nil {
+		return IncidentReview{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return IncidentReview{}, err
+	}
+	return s.IncidentReviewByID(ctx, id)
 }
 
 func (s *Store) MarkIncidentBroadcasted(ctx context.Context, id uuid.UUID) (IncidentReview, error) {

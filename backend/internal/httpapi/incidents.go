@@ -127,6 +127,20 @@ func (h *IncidentHandler) Reject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"incident": review})
 }
 
+func (h *IncidentHandler) Regenerate(w http.ResponseWriter, r *http.Request) {
+	id, ok := incidentIDFromPath(w, r)
+	if !ok {
+		return
+	}
+	user, _ := auth.UserFromContext(r.Context())
+	review, err := h.store.RegenerateIncidentReview(r.Context(), id, user.ID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"incident": review})
+}
+
 func (h *IncidentHandler) Broadcast(w http.ResponseWriter, r *http.Request) {
 	id, ok := incidentIDFromPath(w, r)
 	if !ok {
