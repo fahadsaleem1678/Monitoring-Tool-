@@ -12,6 +12,7 @@ import (
 
 	"monitoring-tool/backend/internal/alerting"
 	"monitoring-tool/backend/internal/auth"
+	"monitoring-tool/backend/internal/chat"
 	"monitoring-tool/backend/internal/config"
 	"monitoring-tool/backend/internal/health"
 	"monitoring-tool/backend/internal/httpapi"
@@ -50,6 +51,8 @@ func main() {
 	healthHandler := health.NewHandler(cfg, prom)
 	authHandler := httpapi.NewAuthHandler(appStore, authService)
 	metricsHandler := httpapi.NewMetricsHandler(prom)
+	chatService := chat.NewService(prom, "monitoring-tool")
+	chatHandler := httpapi.NewChatHandler(chatService)
 	dashboardHandler := httpapi.NewDashboardHandler(appStore, prom)
 	liveManager := live.NewManager(prom, authService, logger)
 	slackNotifier := notify.NewSlackNotifier(cfg.SlackWebhookURL)
@@ -70,6 +73,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/metrics/labels", metricsHandler.Labels)
 	mux.HandleFunc("GET /api/v1/metrics/label-values", metricsHandler.LabelValues)
 	mux.HandleFunc("GET /api/v1/metrics/series", metricsHandler.Series)
+	mux.Handle("POST /api/v1/chat/query", authService.Middleware(http.HandlerFunc(chatHandler.Query)))
 	mux.Handle("GET /api/v1/dashboards", authService.Middleware(http.HandlerFunc(dashboardHandler.List)))
 	mux.Handle("POST /api/v1/dashboards", authService.Middleware(auth.RequireAdmin(http.HandlerFunc(dashboardHandler.Create))))
 	mux.Handle("GET /api/v1/dashboards/{id}", authService.Middleware(http.HandlerFunc(dashboardHandler.ByID)))
