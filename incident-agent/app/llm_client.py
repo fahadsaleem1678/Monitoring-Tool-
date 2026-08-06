@@ -10,11 +10,21 @@ VALID_CONFIDENCE = {"low", "medium", "high"}
 
 
 class LLMClient:
-    def __init__(self, provider: str, model: str, base_url: str = "", api_key: str = ""):
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        base_url: str = "",
+        api_key: str = "",
+        timeout_seconds: float = 180,
+        max_evidence_chars: int = 6000,
+    ):
         self.provider = provider.strip().lower()
         self.model = model.strip()
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key.strip()
+        self.timeout_seconds = timeout_seconds
+        self.max_evidence_chars = max_evidence_chars
 
     @classmethod
     def from_env(cls) -> "LLMClient":
@@ -25,15 +35,19 @@ class LLMClient:
                 model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
                 base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
                 api_key=os.getenv("OPENAI_API_KEY", ""),
+                timeout_seconds=_bounded_float("OPENAI_TIMEOUT_SECONDS", 60, 10, 300),
+                max_evidence_chars=_bounded_int("MAX_LLM_EVIDENCE_CHARS", 6000, 2000, 12000),
             )
         return cls(
             provider="ollama",
             model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
             base_url=os.getenv("OLLAMA_URL", "http://host.docker.internal:11434"),
+            timeout_seconds=_bounded_float("OLLAMA_TIMEOUT_SECONDS", 180, 30, 600),
+            max_evidence_chars=_bounded_int("MAX_LLM_EVIDENCE_CHARS", 6000, 2000, 12000),
         )
 
     async def generate_incident_draft(self, incident: dict, evidence: list[dict]) -> dict:
-        messages = build_incident_messages(incident, evidence)
+        messages = build_incident_messages(incident, evidence, self.max_evidence_chars)
         if self.provider == "openai":
             content = await self._openai_chat(messages)
         elif self.provider == "ollama":
@@ -46,7 +60,7 @@ class LLMClient:
         return parsed
 
     async def _ollama_chat(self, messages: list[dict[str, str]]) -> str:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(
                 f"{self.base_url}/api/chat",
                 json={
@@ -54,7 +68,7 @@ class LLMClient:
                     "messages": messages,
                     "stream": False,
                     "format": "json",
-                    "options": {"temperature": 0.2},
+                    "options": {"temperature": 0.2, "num_ctx": 4096, "num_predict": 700},
                 },
             )
             response.raise_for_status()
@@ -64,7 +78,7 @@ class LLMClient:
     async def _openai_chat(self, messages: list[dict[str, str]]) -> str:
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
@@ -80,14 +94,14 @@ class LLMClient:
         return str(body.get("choices", [{}])[0].get("message", {}).get("content", ""))
 
 
-def build_incident_messages(incident: dict, evidence: list[dict], max_evidence_chars: int = 12000) -> list[dict[str, str]]:
+def build_incident_messages(incident: dict, evidence: list[dict], max_evidence_chars: int = 6000) -> list[dict[str, str]]:
     compact_evidence = [
         {
             "step_type": item.get("step_type", ""),
             "tool_name": item.get("tool_name", ""),
             "query_or_command": item.get("query_or_command", ""),
             "result_summary": item.get("result_summary", ""),
-            "raw_result_json": item.get("raw_result_json", {}),
+            "raw_result_json": _compact_raw_for_prompt(item.get("raw_result_json", {})),
         }
         for item in evidence
     ]
@@ -163,3 +177,53 @@ def _string_list(value: Any) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value or "").strip()
     return [text] if text else []
+
+
+def _compact_raw_for_prompt(value: Any) -> Any:
+    if isinstance(value, dict):
+        keep = {}
+        for key in (
+            "tool",
+            "summary",
+            "query",
+            "official_mcp_fallback",
+            "error",
+        ):
+            if key in value:
+                keep[key] = value[key]
+        data = value.get("data")
+        if isinstance(data, dict):
+            keep["data"] = {
+                key: data[key]
+                for key in (
+                    "series_count",
+                    "target_count",
+                    "metadata_count",
+                    "pods",
+                    "events",
+                    "deployments",
+                    "preview",
+                    "source",
+                )
+                if key in data
+            }
+        return keep or {key: value[key] for key in list(value.keys())[:8]}
+    if isinstance(value, list):
+        return value[:10]
+    return value
+
+
+def _bounded_float(key: str, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.getenv(key, str(fallback)))
+    except ValueError:
+        return fallback
+    return min(max(value, minimum), maximum)
+
+
+def _bounded_int(key: str, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(key, str(fallback)))
+    except ValueError:
+        return fallback
+    return min(max(value, minimum), maximum)

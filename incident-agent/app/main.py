@@ -104,6 +104,55 @@ async def debug_kubernetes_mcp_official():
         return JSONResponse(payload, status_code=502)
 
 
+@app.get("/debug/llm")
+async def debug_llm():
+    llm = LLMClient.from_env()
+    payload = {
+        "provider": llm.provider,
+        "model": llm.model,
+        "base_url": llm.base_url,
+        "timeout_seconds": llm.timeout_seconds,
+        "max_evidence_chars": llm.max_evidence_chars,
+    }
+    try:
+        payload["draft"] = await llm.generate_incident_draft(
+            {
+                "id": "debug",
+                "title": "Debug CrashLoopBackOff",
+                "severity": "warning",
+                "summary": 'Debug incident\nQuery: `sum(kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`',
+            },
+            [
+                {
+                    "step_type": "kubernetes",
+                    "tool_name": "official-kubernetes.pods_list_in_namespace",
+                    "query_or_command": "kubectl get pods -n monitoring-tool",
+                    "result_summary": "Kubernetes returned pods including one CrashLoopBackOff pod",
+                    "raw_result_json": {
+                        "data": {
+                            "pods": [
+                                {
+                                    "namespace": "monitoring-tool",
+                                    "name": "broken-api-debug",
+                                    "phase": "Running",
+                                    "restart_count": 5,
+                                    "waiting_reasons": ["CrashLoopBackOff"],
+                                }
+                            ]
+                        }
+                    },
+                }
+            ],
+        )
+        payload["ok"] = True
+        return payload
+    except Exception as exc:
+        payload["ok"] = False
+        payload["error"] = f"{type(exc).__name__}: {exc}"
+        logger.exception("LLM debug generation failed")
+        return JSONResponse(payload, status_code=502)
+
+
 async def investigate_once():
     backend = BackendClient(os.environ["BACKEND_URL"], os.getenv("AGENT_SERVICE_TOKEN", "dev-agent-token"))
     prometheus = _prometheus_client()

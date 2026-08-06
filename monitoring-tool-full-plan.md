@@ -610,7 +610,6 @@ Integration tests:
 - Frontend to backend smoke test.
 
 Deployment tests:
-
 - `kubectl rollout status`.
 - Backend health endpoint.
 - Frontend loads through ingress.
