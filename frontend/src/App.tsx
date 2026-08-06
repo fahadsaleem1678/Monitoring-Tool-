@@ -4,6 +4,7 @@ import { login, me, type AuthSession } from "./api/auth";
 import { getBackendHealth, type BackendHealth } from "./api/health";
 import { queryInstant, queryRange, type PrometheusMatrixResult, type PrometheusVectorResult } from "./api/metrics";
 import { AlertsView } from "./components/alerts/AlertsView";
+import { AssistantView } from "./components/assistant/AssistantView";
 import { LoginView } from "./components/auth/LoginView";
 import { DashboardManager } from "./components/dashboards/DashboardManager";
 import { IncidentReviewsView } from "./components/incidents/IncidentReviewsView";
@@ -52,7 +53,7 @@ const panels: PanelDefinition[] = [
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(() => readStoredSession());
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [activeView, setActiveView] = useState<"overview" | "dashboards" | "alerts" | "incidents">("overview");
+  const [activeView, setActiveView] = useState<"overview" | "assistant" | "dashboards" | "alerts" | "incidents">("overview");
   const [health, setHealth] = useState<Loadable<BackendHealth>>({ status: "loading" });
   const [cards, setCards] = useState<Loadable<CardMetrics>>({ status: "loading" });
   const [panelData, setPanelData] = useState<Record<string, Loadable<PrometheusMatrixResult[]>>>(
@@ -137,6 +138,9 @@ export function App() {
         <button type="button" className={activeView === "overview" ? "active" : ""} onClick={() => setActiveView("overview")}>
           Overview
         </button>
+        <button type="button" className={activeView === "assistant" ? "active" : ""} onClick={() => setActiveView("assistant")}>
+          Assistant
+        </button>
         <button type="button" className={activeView === "dashboards" ? "active" : ""} onClick={() => setActiveView("dashboards")}>
           Dashboards
         </button>
@@ -192,6 +196,7 @@ export function App() {
         </>
       )}
 
+      {activeView === "assistant" && <AssistantView token={session.token} />}
       {activeView === "dashboards" && <DashboardManager token={session.token} user={session.user} />}
       {activeView === "alerts" && <AlertsView token={session.token} user={session.user} />}
       {activeView === "incidents" && <IncidentReviewsView token={session.token} user={session.user} />}
