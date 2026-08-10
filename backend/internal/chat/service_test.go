@@ -23,7 +23,10 @@ func (f fakeQuerier) InstantQuery(_ context.Context, query string) (json.RawMess
 func TestServiceAskMatchesCrashLoops(t *testing.T) {
 	service := NewService(fakeQuerier{
 		results: map[string]json.RawMessage{
-			`sum(kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vector("2"),
+			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vectorPayload(
+				sample(map[string]string{"pod": "broken-api-5d8c"}, "1"),
+				sample(map[string]string{"pod": "broken-worker-7f9b"}, "1"),
+			),
 		},
 	}, "monitoring-tool")
 
@@ -40,6 +43,9 @@ func TestServiceAskMatchesCrashLoops(t *testing.T) {
 	}
 	if !strings.Contains(response.Answer, "2") || !strings.Contains(response.Answer, "CrashLoopBackOff") {
 		t.Fatalf("answer %q did not include crash loop count", response.Answer)
+	}
+	if !strings.Contains(response.Answer, "broken-api-5d8c") || !strings.Contains(response.Answer, "broken-worker-7f9b") {
+		t.Fatalf("answer %q did not include affected pod names", response.Answer)
 	}
 	if len(response.Queries) != 1 {
 		t.Fatalf("queries length = %d, want 1", len(response.Queries))
@@ -71,7 +77,7 @@ func TestServiceAskReturnsUnsupportedForUnknownQuestion(t *testing.T) {
 func TestServiceAskFormatsHealthyZeroValue(t *testing.T) {
 	service := NewService(fakeQuerier{
 		results: map[string]json.RawMessage{
-			`sum(kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vector("0"),
+			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vectorPayload(),
 		},
 	}, "monitoring-tool")
 
@@ -100,6 +106,20 @@ func TestServiceAskRejectsEmptyAndLongMessages(t *testing.T) {
 	}
 }
 
-func vector(value string) json.RawMessage {
-	return json.RawMessage(fmt.Sprintf(`{"resultType":"vector","result":[{"metric":{},"value":[123,%q]}]}`, value))
+type vectorSample struct {
+	metric map[string]string
+	value  string
+}
+
+func sample(metric map[string]string, value string) vectorSample {
+	return vectorSample{metric: metric, value: value}
+}
+
+func vectorPayload(samples ...vectorSample) json.RawMessage {
+	parts := make([]string, 0, len(samples))
+	for _, item := range samples {
+		metric, _ := json.Marshal(item.metric)
+		parts = append(parts, fmt.Sprintf(`{"metric":%s,"value":[123,%q]}`, metric, item.value))
+	}
+	return json.RawMessage(fmt.Sprintf(`{"resultType":"vector","result":[%s]}`, strings.Join(parts, ",")))
 }

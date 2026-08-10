@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 )
 
 const (
 	IntentUnsupported = "unsupported"
-	ConfidenceHigh   = "high"
-	ConfidenceLow    = "low"
+	ConfidenceHigh    = "high"
+	ConfidenceLow     = "low"
 	defaultNamespace  = "monitoring-tool"
 	maxMessageLength  = 500
 )
@@ -45,6 +46,7 @@ type intentDefinition struct {
 	label               string
 	query               func(namespace string) string
 	keywords            []string
+	seriesLabel         string
 	healthyWhenPositive bool
 	healthyText         string
 	warningText         string
@@ -75,13 +77,14 @@ func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
 		return Response{}, fmt.Errorf("run %s check: %w", intent.id, err)
 	}
 
-	value, err := firstVectorValue(raw)
+	result, err := readVector(raw)
 	if err != nil {
 		return Response{}, fmt.Errorf("read %s check: %w", intent.id, err)
 	}
 
-	count := int(math.Round(value))
-	severity, answer := formatIntentAnswer(intent, count, s.namespace)
+	count := int(math.Round(result.total))
+	names := result.nonzeroLabels(intent.seriesLabel)
+	severity, answer := formatIntentAnswer(intent, count, s.namespace, names)
 
 	return Response{
 		Answer:     answer,
@@ -99,7 +102,7 @@ func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
 	}, nil
 }
 
-func formatIntentAnswer(intent *intentDefinition, count int, namespace string) (string, string) {
+func formatIntentAnswer(intent *intentDefinition, count int, namespace string, names []string) (string, string) {
 	if intent.healthyWhenPositive {
 		if count > 0 {
 			return "healthy", fmt.Sprintf(intent.healthyText, count)
@@ -108,7 +111,11 @@ func formatIntentAnswer(intent *intentDefinition, count int, namespace string) (
 	}
 
 	if count > 0 {
-		return "warning", fmt.Sprintf(intent.warningText, count, namespace)
+		answer := fmt.Sprintf(intent.warningText, count, namespace)
+		if len(names) > 0 {
+			answer = fmt.Sprintf("%s Affected pods: %s.", answer, strings.Join(names, ", "))
+		}
+		return "warning", answer
 	}
 	return "healthy", fmt.Sprintf(intent.healthyText, namespace)
 }
@@ -155,31 +162,68 @@ func unsupportedResponse() Response {
 	}
 }
 
-func firstVectorValue(raw json.RawMessage) (float64, error) {
+type vectorResult struct {
+	total  float64
+	series []vectorSeries
+}
+
+type vectorSeries struct {
+	metric map[string]string
+	value  float64
+}
+
+func (r vectorResult) nonzeroLabels(label string) []string {
+	if label == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	names := []string{}
+	for _, series := range r.series {
+		name := strings.TrimSpace(series.metric[label])
+		if name == "" || seen[name] || series.value <= 0 {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+		if len(names) == 8 {
+			break
+		}
+	}
+	return names
+}
+
+func readVector(raw json.RawMessage) (vectorResult, error) {
 	var body struct {
 		ResultType string `json:"resultType"`
 		Result     []struct {
-			Value []any `json:"value"`
+			Metric map[string]string `json:"metric"`
+			Value  []any             `json:"value"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return 0, err
+		return vectorResult{}, err
 	}
 	if body.ResultType != "vector" {
-		return 0, fmt.Errorf("expected vector result, got %q", body.ResultType)
+		return vectorResult{}, fmt.Errorf("expected vector result, got %q", body.ResultType)
 	}
-	if len(body.Result) == 0 || len(body.Result[0].Value) < 2 {
-		return 0, nil
+
+	result := vectorResult{series: []vectorSeries{}}
+	for _, item := range body.Result {
+		if len(item.Value) < 2 {
+			continue
+		}
+		text, ok := item.Value[1].(string)
+		if !ok {
+			return vectorResult{}, fmt.Errorf("vector value was not a string")
+		}
+		value, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return vectorResult{}, fmt.Errorf("vector value %q was not numeric", text)
+		}
+		result.total += value
+		result.series = append(result.series, vectorSeries{metric: item.Metric, value: value})
 	}
-	text, ok := body.Result[0].Value[1].(string)
-	if !ok {
-		return 0, fmt.Errorf("vector value was not a string")
-	}
-	var value float64
-	if _, err := fmt.Sscanf(text, "%f", &value); err != nil {
-		return 0, fmt.Errorf("vector value %q was not numeric", text)
-	}
-	return value, nil
+	return result, nil
 }
 
 func defaultSuggestions() []string {
@@ -209,8 +253,9 @@ var intents = []intentDefinition{
 		id:    "pod_crashloops",
 		label: "CrashLoopBackOff pods",
 		query: func(namespace string) string {
-			return fmt.Sprintf(`sum(kube_pod_container_status_waiting_reason{namespace=%q,reason="CrashLoopBackOff"})`, namespace)
+			return fmt.Sprintf(`sum by (pod) (kube_pod_container_status_waiting_reason{namespace=%q,reason="CrashLoopBackOff"})`, namespace)
 		},
+		seriesLabel: "pod",
 		keywords:    []string{"crash loop", "crashloop", "crashloopbackoff"},
 		healthyText: "No pods are showing CrashLoopBackOff in %s.",
 		warningText: "There are %d pods showing CrashLoopBackOff in %s.",
@@ -219,8 +264,9 @@ var intents = []intentDefinition{
 		id:    "pod_image_pull_errors",
 		label: "Image pull error pods",
 		query: func(namespace string) string {
-			return fmt.Sprintf(`sum(kube_pod_container_status_waiting_reason{namespace=%q,reason=~"ImagePullBackOff|ErrImagePull"})`, namespace)
+			return fmt.Sprintf(`sum by (pod) (kube_pod_container_status_waiting_reason{namespace=%q,reason=~"ImagePullBackOff|ErrImagePull"})`, namespace)
 		},
+		seriesLabel: "pod",
 		keywords:    []string{"image pull", "imagepull", "errimagepull", "pull error", "bad image"},
 		healthyText: "No pods are reporting image pull errors in %s.",
 		warningText: "There are %d pods with image pull errors in %s.",
@@ -229,8 +275,9 @@ var intents = []intentDefinition{
 		id:    "pod_pending",
 		label: "Pending pods",
 		query: func(namespace string) string {
-			return fmt.Sprintf(`sum(kube_pod_status_phase{namespace=%q,phase="Pending"})`, namespace)
+			return fmt.Sprintf(`sum by (pod) (kube_pod_status_phase{namespace=%q,phase="Pending"})`, namespace)
 		},
+		seriesLabel: "pod",
 		keywords:    []string{"pending", "unschedulable", "stuck scheduling"},
 		healthyText: "No pods are pending in %s.",
 		warningText: "There are %d pending pods in %s.",
@@ -239,9 +286,10 @@ var intents = []intentDefinition{
 		id:    "pod_restarts",
 		label: "Pod restarts in the last 5 minutes",
 		query: func(namespace string) string {
-			return fmt.Sprintf(`sum(increase(kube_pod_container_status_restarts_total{namespace=%q}[5m]))`, namespace)
+			return fmt.Sprintf(`sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=%q}[5m]))`, namespace)
 		},
-		keywords:    []string{"restart", "restarting", "restarted"},
+		seriesLabel: "pod",
+		keywords:    []string{"restarts", "restarting", "restarted"},
 		healthyText: "No pod restarts were reported in %s during the last 5 minutes.",
 		warningText: "There were %d pod restarts in %s during the last 5 minutes.",
 	},
@@ -282,8 +330,9 @@ var intents = []intentDefinition{
 		id:    "pod_health",
 		label: "Non-running pods",
 		query: func(namespace string) string {
-			return fmt.Sprintf(`sum(kube_pod_status_phase{namespace=%q,phase=~"Pending|Failed|Unknown"})`, namespace)
+			return fmt.Sprintf(`sum by (pod) (kube_pod_status_phase{namespace=%q,phase=~"Pending|Failed|Unknown"})`, namespace)
 		},
+		seriesLabel: "pod",
 		keywords:    []string{"pod health", "pods healthy", "pods ok", "pods okay", "are my pods healthy"},
 		healthyText: "Pods look healthy in %s. No pending, failed, or unknown pods were reported.",
 		warningText: "There are %d pods in %s that are pending, failed, or unknown.",
