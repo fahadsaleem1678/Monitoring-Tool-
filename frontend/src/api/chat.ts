@@ -15,11 +15,16 @@ export type ChatResponse = {
   suggestions: string[];
 };
 
-export async function askClusterAssistant(token: string, message: string): Promise<ChatResponse> {
+export type ChatContext = {
+  pods: string[];
+  last_intent: string;
+};
+
+export async function askClusterAssistant(token: string, message: string, context?: ChatContext): Promise<ChatResponse> {
   const response = await fetch("/api/v1/chat/query", {
     method: "POST",
     headers: { ...authHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ message })
+    body: JSON.stringify({ message, context })
   });
   return readJSON<ChatResponse>(response);
 }

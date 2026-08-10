@@ -12,6 +12,7 @@ import (
 
 type chatAsker interface {
 	Ask(ctx context.Context, message string) (chat.Response, error)
+	AskWithContext(ctx context.Context, message string, chatContext chat.Context) (chat.Response, error)
 }
 
 type ChatHandler struct {
@@ -19,7 +20,8 @@ type ChatHandler struct {
 }
 
 type chatRequest struct {
-	Message string `json:"message"`
+	Message string       `json:"message"`
+	Context chat.Context `json:"context"`
 }
 
 func NewChatHandler(service chatAsker) *ChatHandler {
@@ -37,7 +39,7 @@ func (h *ChatHandler) Query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := h.service.Ask(r.Context(), req.Message)
+	response, err := h.service.AskWithContext(r.Context(), req.Message, req.Context)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

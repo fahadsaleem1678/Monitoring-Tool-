@@ -66,6 +66,11 @@ type Response struct {
 	Suggestions []string `json:"suggestions"`
 }
 
+type Context struct {
+	Pods       []string `json:"pods"`
+	LastIntent string   `json:"last_intent"`
+}
+
 type Fact struct {
 	Label    string `json:"label"`
 	Value    string `json:"value"`
@@ -100,6 +105,10 @@ func (s *Service) WithKubernetes(kubernetes KubernetesReader, maxLogLines int) *
 }
 
 func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
+	return s.AskWithContext(ctx, message, Context{})
+}
+
+func (s *Service) AskWithContext(ctx context.Context, message string, chatContext Context) (Response, error) {
 	normalized, err := normalizeMessage(message)
 	if err != nil {
 		return Response{}, err
@@ -113,8 +122,8 @@ func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
 		if isUnhealthyPodListQuestion(normalized) {
 			return s.answerUnhealthyPods(ctx)
 		}
-		if isPodDetailQuestion(normalized) {
-			return s.answerPodDetail(ctx, message, normalized)
+		if isPodDetailQuestion(normalized) || isFollowUpPodQuestion(normalized) {
+			return s.answerPodDetail(ctx, message, normalized, chatContext)
 		}
 		return unsupportedResponse(), nil
 	}
@@ -310,6 +319,16 @@ func isPodDetailQuestion(message string) bool {
 		strings.Contains(message, "exists")
 }
 
+func isFollowUpPodQuestion(message string) bool {
+	return strings.Contains(message, " it") ||
+		message == "it" ||
+		strings.Contains(message, "that pod") ||
+		strings.Contains(message, "this pod") ||
+		strings.Contains(message, "first one") ||
+		strings.Contains(message, "second one") ||
+		strings.Contains(message, "third one")
+}
+
 func isUnhealthyPodListQuestion(message string) bool {
 	hasPod := strings.Contains(message, "pod")
 	hasListIntent := strings.Contains(message, "which") ||
@@ -386,12 +405,13 @@ func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
 	facts := []Fact{{Label: "Pods", Value: fmt.Sprintf("%d", len(pods)), Severity: "healthy"}}
 	for _, pod := range pods {
 		names = append(names, describePodShort(pod))
+		facts = append(facts, Fact{Label: "Pod", Value: pod.Name, Severity: severityForPod(pod)})
 	}
 	return Response{
 		Answer:      fmt.Sprintf("I found %d pod(s) in %s: %s.", len(pods), s.namespace, strings.Join(names, "; ")),
 		Intent:      "all_pods",
 		Confidence:  ConfidenceHigh,
-		Facts:       facts,
+		Facts:       limitFacts(facts, 24),
 		Queries:     []string{"kubernetes.pods"},
 		Suggestions: []string{"Which pods are failing?", "Any crash loops?", "Show details for a pod name"},
 	}, nil
@@ -442,7 +462,7 @@ func (s *Service) answerUnhealthyPods(ctx context.Context) (Response, error) {
 	}, nil
 }
 
-func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normalizedMessage string) (Response, error) {
+func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normalizedMessage string, chatContext Context) (Response, error) {
 	if s.kubernetes == nil {
 		return Response{
 			Answer:      "I can identify cluster health issues, but Kubernetes pod details are not configured for this backend yet.",
@@ -458,7 +478,10 @@ func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normaliz
 	if err != nil {
 		return Response{}, fmt.Errorf("list pods from kubernetes mcp: %w", err)
 	}
-	pod, ok := matchPodFromMessage(originalMessage, normalizedMessage, pods)
+	pod, ok := podFromContext(normalizedMessage, pods, chatContext)
+	if !ok {
+		pod, ok = matchPodFromMessage(originalMessage, normalizedMessage, pods)
+	}
 	if !ok {
 		answer := "I could not match that question to a pod name in the monitoring-tool namespace."
 		if len(pods) > 0 {
@@ -503,6 +526,55 @@ func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normaliz
 		Queries:     []string{"kubernetes.pods", "kubernetes.events", "kubernetes.logs"},
 		Suggestions: []string{"Any crash loops?", "Any image pull errors?", "Which pods are restarting?"},
 	}, nil
+}
+
+func podFromContext(message string, pods []Pod, chatContext Context) (Pod, bool) {
+	podNames := cleanContextPods(chatContext.Pods)
+	if len(podNames) == 0 {
+		return Pod{}, false
+	}
+
+	index := -1
+	switch {
+	case strings.Contains(message, "first one"), strings.Contains(message, "first pod"):
+		index = 0
+	case strings.Contains(message, "second one"), strings.Contains(message, "second pod"):
+		index = 1
+	case strings.Contains(message, "third one"), strings.Contains(message, "third pod"):
+		index = 2
+	case strings.Contains(message, " it"), message == "it", strings.Contains(message, "that pod"), strings.Contains(message, "this pod"):
+		index = 0
+	}
+	if index < 0 || index >= len(podNames) {
+		return Pod{}, false
+	}
+	return findPodByName(pods, podNames[index])
+}
+
+func cleanContextPods(values []string) []string {
+	seen := map[string]bool{}
+	pods := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		pods = append(pods, value)
+		if len(pods) == 8 {
+			break
+		}
+	}
+	return pods
+}
+
+func findPodByName(pods []Pod, name string) (Pod, bool) {
+	for _, pod := range pods {
+		if pod.Name == name {
+			return pod, true
+		}
+	}
+	return Pod{}, false
 }
 
 func unhealthyPods(pods []Pod) []Pod {

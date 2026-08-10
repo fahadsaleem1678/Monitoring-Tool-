@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { askClusterAssistant, type ChatResponse } from "../../api/chat";
+import { askClusterAssistant, type ChatContext, type ChatResponse } from "../../api/chat";
 
 type ChatMessage = {
   id: string;
@@ -45,12 +45,13 @@ export function AssistantView({ token }: AssistantViewProps) {
     }
 
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", text: trimmed };
+    const context = buildChatContext(messages);
     setMessages((current) => [...current, userMessage]);
     setDraft("");
     setLoading(true);
 
     try {
-      const response = await askClusterAssistant(token, trimmed);
+      const response = await askClusterAssistant(token, trimmed, context);
       setMessages((current) => [
         ...current,
         {
@@ -128,6 +129,34 @@ export function AssistantView({ token }: AssistantViewProps) {
       </form>
     </section>
   );
+}
+
+function buildChatContext(messages: ChatMessage[]): ChatContext | undefined {
+  const lastResponse = [...messages].reverse().find((message) => message.role === "assistant" && message.response)?.response;
+  if (!lastResponse) {
+    return undefined;
+  }
+  const pods = extractPodNames(lastResponse);
+  if (pods.length === 0) {
+    return { pods: [], last_intent: lastResponse.intent };
+  }
+  return { pods, last_intent: lastResponse.intent };
+}
+
+function extractPodNames(response: ChatResponse) {
+  const names = new Set<string>();
+  for (const fact of response.facts) {
+    if (fact.label.toLowerCase() === "pod" && fact.value.trim()) {
+      names.add(fact.value.trim());
+    }
+  }
+  for (const suggestion of response.suggestions) {
+    const match = suggestion.match(/^Show details for\s+(.+)$/i);
+    if (match?.[1]) {
+      names.add(match[1].trim());
+    }
+  }
+  return [...names].slice(0, 8);
 }
 
 function AssistantDetails({ response }: { response: ChatResponse }) {

@@ -15,10 +15,17 @@ type fakeChatService struct {
 	response chat.Response
 	err      error
 	message  string
+	context  chat.Context
 }
 
 func (f *fakeChatService) Ask(_ context.Context, message string) (chat.Response, error) {
 	f.message = message
+	return f.response, f.err
+}
+
+func (f *fakeChatService) AskWithContext(_ context.Context, message string, chatContext chat.Context) (chat.Response, error) {
+	f.message = message
+	f.context = chatContext
 	return f.response, f.err
 }
 
@@ -78,5 +85,30 @@ func TestChatHandlerQueryRejectsInvalidJSON(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChatHandlerQueryPassesContext(t *testing.T) {
+	service := &fakeChatService{
+		response: chat.Response{Answer: "ok", Intent: "pod_details", Confidence: chat.ConfidenceHigh},
+	}
+	handler := NewChatHandler(service)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/chat/query",
+		strings.NewReader(`{"message":"show logs for it","context":{"pods":["broken-api-5d8c"],"last_intent":"unhealthy_pods"}}`),
+	)
+	rec := httptest.NewRecorder()
+
+	handler.Query(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.context.LastIntent != "unhealthy_pods" {
+		t.Fatalf("last intent = %q, want unhealthy_pods", service.context.LastIntent)
+	}
+	if len(service.context.Pods) != 1 || service.context.Pods[0] != "broken-api-5d8c" {
+		t.Fatalf("pods = %#v, want previous pod", service.context.Pods)
 	}
 }

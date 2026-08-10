@@ -326,6 +326,56 @@ func TestServiceAskPodDetailsSuggestsKnownPodsWhenNoMatch(t *testing.T) {
 	}
 }
 
+func TestServiceAskUsesContextForItFollowup(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{
+			{Name: "broken-api-5d8c", Phase: "Running", RestartCount: 3, WaitingReasons: []string{"CrashLoopBackOff"}},
+		},
+		logs: Logs{Pod: "broken-api-5d8c", Preview: "fatal config missing"},
+	}, 80)
+
+	response, err := service.AskWithContext(
+		context.Background(),
+		"show logs for it",
+		Context{Pods: []string{"broken-api-5d8c"}, LastIntent: "unhealthy_pods"},
+	)
+	if err != nil {
+		t.Fatalf("AskWithContext returned error: %v", err)
+	}
+
+	if response.Intent != "pod_details" {
+		t.Fatalf("intent = %q, want pod_details", response.Intent)
+	}
+	if !strings.Contains(response.Answer, "broken-api-5d8c") || !strings.Contains(response.Answer, "fatal config missing") {
+		t.Fatalf("answer %q did not include context pod details", response.Answer)
+	}
+}
+
+func TestServiceAskUsesContextOrdinalFollowup(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{
+			{Name: "first-api-1111", Phase: "Running"},
+			{Name: "second-api-2222", Phase: "Pending"},
+		},
+	}, 80)
+
+	response, err := service.AskWithContext(
+		context.Background(),
+		"tell me more about the second one",
+		Context{Pods: []string{"first-api-1111", "second-api-2222"}, LastIntent: "unhealthy_pods"},
+	)
+	if err != nil {
+		t.Fatalf("AskWithContext returned error: %v", err)
+	}
+
+	if !strings.Contains(response.Answer, "second-api-2222") {
+		t.Fatalf("answer %q did not include second context pod", response.Answer)
+	}
+	if strings.Contains(response.Answer, "first-api-1111") {
+		t.Fatalf("answer %q included first context pod", response.Answer)
+	}
+}
+
 type vectorSample struct {
 	metric map[string]string
 	value  string
