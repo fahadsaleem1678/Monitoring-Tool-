@@ -92,6 +92,26 @@ func TestServiceAskReturnsUnsupportedForUnknownQuestion(t *testing.T) {
 	}
 }
 
+func TestServiceAskMatchesSingularPodRestartQuestion(t *testing.T) {
+	service := NewService(fakeQuerier{
+		results: map[string]json.RawMessage{
+			`sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace="monitoring-tool"}[5m]))`: vectorPayload(),
+		},
+	}, "monitoring-tool")
+
+	response, err := service.Ask(context.Background(), "any pod with 0 restart?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "pod_restarts" {
+		t.Fatalf("intent = %q, want pod_restarts", response.Intent)
+	}
+	if !strings.Contains(response.Answer, "No pod restarts") {
+		t.Fatalf("answer = %q, want restart zero-value wording", response.Answer)
+	}
+}
+
 func TestServiceAskFormatsHealthyZeroValue(t *testing.T) {
 	service := NewService(fakeQuerier{
 		results: map[string]json.RawMessage{
@@ -121,6 +141,24 @@ func TestServiceAskRejectsEmptyAndLongMessages(t *testing.T) {
 
 	if _, err := service.Ask(context.Background(), strings.Repeat("x", maxMessageLength+1)); err == nil {
 		t.Fatal("expected long message error")
+	}
+}
+
+func TestServiceAskFindsPodNamedQuestion(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{{Name: "broken-api-5d8c", Phase: "Running"}},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "any pod named broken-api?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "pod_details" {
+		t.Fatalf("intent = %q, want pod_details", response.Intent)
+	}
+	if !strings.Contains(response.Answer, "broken-api-5d8c") {
+		t.Fatalf("answer = %q, want matched pod name", response.Answer)
 	}
 }
 

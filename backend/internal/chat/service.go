@@ -186,6 +186,9 @@ func matchIntent(message string) *intentDefinition {
 	for _, intent := range intents {
 		for _, keyword := range intent.keywords {
 			if strings.Contains(message, keyword) {
+				if intent.id == "pod_restarts" && isMutationRestartRequest(message) {
+					continue
+				}
 				return &intent
 			}
 		}
@@ -295,7 +298,22 @@ func isPodDetailQuestion(message string) bool {
 		strings.Contains(message, "detail") ||
 		strings.Contains(message, "failing") ||
 		strings.Contains(message, "logs") ||
-		strings.Contains(message, "events")
+		strings.Contains(message, "events") ||
+		strings.Contains(message, "pod named") ||
+		strings.Contains(message, "named") ||
+		strings.Contains(message, "exists")
+}
+
+func isMutationRestartRequest(message string) bool {
+	if !strings.Contains(message, "restart") {
+		return false
+	}
+	return strings.Contains(message, "deployment") ||
+		strings.Contains(message, "deploy") ||
+		strings.Contains(message, "service") ||
+		strings.Contains(message, "rollout") ||
+		strings.Contains(message, "please restart") ||
+		strings.Contains(message, "can you restart")
 }
 
 func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normalizedMessage string) (Response, error) {
@@ -316,8 +334,12 @@ func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normaliz
 	}
 	pod, ok := matchPodFromMessage(originalMessage, normalizedMessage, pods)
 	if !ok {
+		answer := "I could not match that question to a pod name in the monitoring-tool namespace."
+		if len(pods) > 0 {
+			answer = fmt.Sprintf("%s I can see pods such as: %s.", answer, strings.Join(firstPodNames(pods, 6), ", "))
+		}
 		return Response{
-			Answer:      "I could not match that question to a pod name in the monitoring-tool namespace.",
+			Answer:      answer,
 			Intent:      "pod_details",
 			Confidence:  ConfidenceLow,
 			Facts:       []Fact{},
@@ -435,6 +457,20 @@ func podNameSuggestions(pods []Pod) []string {
 	return suggestions
 }
 
+func firstPodNames(pods []Pod, limit int) []string {
+	names := []string{}
+	for _, pod := range pods {
+		if strings.TrimSpace(pod.Name) == "" {
+			continue
+		}
+		names = append(names, pod.Name)
+		if len(names) == limit {
+			break
+		}
+	}
+	return names
+}
+
 func severityForPod(pod Pod) string {
 	if pod.Phase != "Running" || len(pod.WaitingReasons) > 0 {
 		return "warning"
@@ -506,7 +542,7 @@ var intents = []intentDefinition{
 			return fmt.Sprintf(`sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=%q}[5m]))`, namespace)
 		},
 		seriesLabel: "pod",
-		keywords:    []string{"restarts", "restarting", "restarted"},
+		keywords:    []string{"restart", "restarts", "restarting", "restarted"},
 		healthyText: "No pod restarts were reported in %s during the last 5 minutes.",
 		warningText: "There were %d pod restarts in %s during the last 5 minutes.",
 	},
