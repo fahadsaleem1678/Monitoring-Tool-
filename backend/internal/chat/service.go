@@ -107,6 +107,9 @@ func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
 
 	intent := matchIntent(normalized)
 	if intent == nil {
+		if isAllPodListQuestion(normalized) {
+			return s.answerAllPods(ctx)
+		}
 		if isUnhealthyPodListQuestion(normalized) {
 			return s.answerUnhealthyPods(ctx)
 		}
@@ -324,6 +327,22 @@ func isUnhealthyPodListQuestion(message string) bool {
 	return hasPod && hasListIntent && hasUnhealthy
 }
 
+func isAllPodListQuestion(message string) bool {
+	hasPod := strings.Contains(message, "pod")
+	hasListIntent := strings.Contains(message, "list") ||
+		strings.Contains(message, "show") ||
+		strings.Contains(message, "all") ||
+		strings.Contains(message, "names")
+	hasSpecificHealthIntent := strings.Contains(message, "unhealthy") ||
+		strings.Contains(message, "failing") ||
+		strings.Contains(message, "failed") ||
+		strings.Contains(message, "crash") ||
+		strings.Contains(message, "restart") ||
+		strings.Contains(message, "pending") ||
+		strings.Contains(message, "image")
+	return hasPod && hasListIntent && !hasSpecificHealthIntent
+}
+
 func isMutationRestartRequest(message string) bool {
 	if !strings.Contains(message, "restart") {
 		return false
@@ -334,6 +353,48 @@ func isMutationRestartRequest(message string) bool {
 		strings.Contains(message, "rollout") ||
 		strings.Contains(message, "please restart") ||
 		strings.Contains(message, "can you restart")
+}
+
+func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
+	if s.kubernetes == nil {
+		return Response{
+			Answer:      "I can count pods, but Kubernetes pod listing is not configured for this backend yet.",
+			Intent:      IntentUnsupported,
+			Confidence:  ConfidenceLow,
+			Facts:       []Fact{},
+			Queries:     []string{},
+			Suggestions: defaultSuggestions(),
+		}, nil
+	}
+
+	pods, err := s.kubernetes.Pods(ctx, s.namespace)
+	if err != nil {
+		return Response{}, fmt.Errorf("list pods from kubernetes mcp: %w", err)
+	}
+	if len(pods) == 0 {
+		return Response{
+			Answer:      fmt.Sprintf("I did not find any pods in %s.", s.namespace),
+			Intent:      "all_pods",
+			Confidence:  ConfidenceHigh,
+			Facts:       []Fact{{Label: "Pods", Value: "0", Severity: "warning"}},
+			Queries:     []string{"kubernetes.pods"},
+			Suggestions: []string{"Are my pods healthy?", "Any pending pods?", "Are nodes ready?"},
+		}, nil
+	}
+
+	names := make([]string, 0, len(pods))
+	facts := []Fact{{Label: "Pods", Value: fmt.Sprintf("%d", len(pods)), Severity: "healthy"}}
+	for _, pod := range pods {
+		names = append(names, describePodShort(pod))
+	}
+	return Response{
+		Answer:      fmt.Sprintf("I found %d pod(s) in %s: %s.", len(pods), s.namespace, strings.Join(names, "; ")),
+		Intent:      "all_pods",
+		Confidence:  ConfidenceHigh,
+		Facts:       facts,
+		Queries:     []string{"kubernetes.pods"},
+		Suggestions: []string{"Which pods are failing?", "Any crash loops?", "Show details for a pod name"},
+	}, nil
 }
 
 func (s *Service) answerUnhealthyPods(ctx context.Context) (Response, error) {
@@ -608,7 +669,7 @@ var intents = []intentDefinition{
 			return fmt.Sprintf(`sum by (pod) (kube_pod_container_status_waiting_reason{namespace=%q,reason="CrashLoopBackOff"})`, namespace)
 		},
 		seriesLabel: "pod",
-		keywords:    []string{"crash loop", "crashloop", "crashloopbackoff"},
+		keywords:    []string{"crash loop", "crash back loop", "crashbackloop", "crashloop", "crashloopbackoff"},
 		healthyText: "No pods are showing CrashLoopBackOff in %s.",
 		warningText: "There are %d pods showing CrashLoopBackOff in %s.",
 	},

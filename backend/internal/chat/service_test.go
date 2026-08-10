@@ -70,6 +70,28 @@ func TestServiceAskMatchesCrashLoops(t *testing.T) {
 	}
 }
 
+func TestServiceAskMatchesCrashBackLoopTypo(t *testing.T) {
+	service := NewService(fakeQuerier{
+		results: map[string]json.RawMessage{
+			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vectorPayload(
+				sample(map[string]string{"pod": "broken-api-5d8c"}, "1"),
+			),
+		},
+	}, "monitoring-tool")
+
+	response, err := service.Ask(context.Background(), "which pods are in crash back loop")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "pod_crashloops" {
+		t.Fatalf("intent = %q, want pod_crashloops", response.Intent)
+	}
+	if !strings.Contains(response.Answer, "broken-api-5d8c") {
+		t.Fatalf("answer %q did not include affected pod name", response.Answer)
+	}
+}
+
 func TestServiceAskReturnsUnsupportedForUnknownQuestion(t *testing.T) {
 	service := NewService(fakeQuerier{}, "monitoring-tool")
 
@@ -159,6 +181,47 @@ func TestServiceAskFindsPodNamedQuestion(t *testing.T) {
 	}
 	if !strings.Contains(response.Answer, "broken-api-5d8c") {
 		t.Fatalf("answer = %q, want matched pod name", response.Answer)
+	}
+}
+
+func TestServiceAskListsAllPods(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{
+			{Name: "healthy-api-6c7d", Phase: "Running"},
+			{Name: "broken-api-5d8c", Phase: "Running", RestartCount: 4, WaitingReasons: []string{"CrashLoopBackOff"}},
+		},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "list all pods")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "all_pods" {
+		t.Fatalf("intent = %q, want all_pods", response.Intent)
+	}
+	for _, expected := range []string{"healthy-api-6c7d", "broken-api-5d8c", "CrashLoopBackOff"} {
+		if !strings.Contains(response.Answer, expected) {
+			t.Fatalf("answer %q did not include %q", response.Answer, expected)
+		}
+	}
+}
+
+func TestServiceAskListsAllPodNames(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{{Name: "healthy-api-6c7d", Phase: "Running"}},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "show all pod names")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "all_pods" {
+		t.Fatalf("intent = %q, want all_pods", response.Intent)
+	}
+	if !strings.Contains(response.Answer, "healthy-api-6c7d") {
+		t.Fatalf("answer %q did not include pod name", response.Answer)
 	}
 }
 
