@@ -142,20 +142,24 @@ func (s *Service) AskWithContext(ctx context.Context, message string, chatContex
 	count := int(math.Round(result.total))
 	names := result.nonzeroLabels(intent.seriesLabel)
 	severity, answer := formatIntentAnswer(intent, count, s.namespace, names)
+	facts := []Fact{
+		{
+			Label:    intent.label,
+			Value:    fmt.Sprintf("%d", count),
+			Severity: severity,
+		},
+	}
+	for _, name := range names {
+		facts = append(facts, Fact{Label: "Pod", Value: name, Severity: severity})
+	}
 
 	return Response{
-		Answer:     answer,
-		Intent:     intent.id,
-		Confidence: ConfidenceHigh,
-		Facts: []Fact{
-			{
-				Label:    intent.label,
-				Value:    fmt.Sprintf("%d", count),
-				Severity: severity,
-			},
-		},
+		Answer:      answer,
+		Intent:      intent.id,
+		Confidence:  ConfidenceHigh,
+		Facts:       facts,
 		Queries:     []string{query},
-		Suggestions: suggestionsFor(intent.id),
+		Suggestions: suggestionsForIntentAndPods(intent.id, names),
 	}, nil
 }
 
@@ -296,6 +300,21 @@ func defaultSuggestions() []string {
 }
 
 func suggestionsFor(intent string) []string {
+	return suggestionsForIntentAndPods(intent, nil)
+}
+
+func suggestionsForIntentAndPods(intent string, pods []string) []string {
+	if len(pods) > 0 {
+		suggestions := make([]string, 0, len(pods)+2)
+		for _, pod := range pods {
+			suggestions = append(suggestions, "Show details for "+pod)
+			if len(suggestions) == 4 {
+				break
+			}
+		}
+		suggestions = append(suggestions, "Show logs for it")
+		return suggestions
+	}
 	switch intent {
 	case "pod_crashloops":
 		return []string{"Which pods are restarting?", "Any image pull errors?"}

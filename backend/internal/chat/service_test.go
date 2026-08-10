@@ -65,6 +65,12 @@ func TestServiceAskMatchesCrashLoops(t *testing.T) {
 	if !strings.Contains(response.Answer, "broken-api-5d8c") || !strings.Contains(response.Answer, "broken-worker-7f9b") {
 		t.Fatalf("answer %q did not include affected pod names", response.Answer)
 	}
+	if !hasFact(response.Facts, "Pod", "broken-api-5d8c") || !hasFact(response.Facts, "Pod", "broken-worker-7f9b") {
+		t.Fatalf("facts = %#v, want affected pod facts", response.Facts)
+	}
+	if !containsString(response.Suggestions, "Show details for broken-api-5d8c") {
+		t.Fatalf("suggestions = %#v, want pod detail suggestion", response.Suggestions)
+	}
 	if len(response.Queries) != 1 {
 		t.Fatalf("queries length = %d, want 1", len(response.Queries))
 	}
@@ -351,6 +357,42 @@ func TestServiceAskUsesContextForItFollowup(t *testing.T) {
 	}
 }
 
+func TestServiceAskUsesCrashLoopPodFactForItFollowup(t *testing.T) {
+	service := NewService(fakeQuerier{
+		results: map[string]json.RawMessage{
+			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vectorPayload(
+				sample(map[string]string{"pod": "broken-api-5d8c"}, "1"),
+			),
+		},
+	}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{
+			{Name: "broken-api-5d8c", Phase: "Running", RestartCount: 3, WaitingReasons: []string{"CrashLoopBackOff"}},
+		},
+		logs: Logs{Pod: "broken-api-5d8c", Preview: "fatal config missing"},
+	}, 80)
+
+	first, err := service.Ask(context.Background(), "any pod in crash back loop?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+	contextPods := podsFromFacts(first.Facts)
+	if len(contextPods) != 1 || contextPods[0] != "broken-api-5d8c" {
+		t.Fatalf("context pods = %#v, want crashloop pod", contextPods)
+	}
+
+	second, err := service.AskWithContext(
+		context.Background(),
+		"tell me more about it",
+		Context{Pods: contextPods, LastIntent: first.Intent},
+	)
+	if err != nil {
+		t.Fatalf("AskWithContext returned error: %v", err)
+	}
+	if !strings.Contains(second.Answer, "broken-api-5d8c") || !strings.Contains(second.Answer, "fatal config missing") {
+		t.Fatalf("answer %q did not include context pod details", second.Answer)
+	}
+}
+
 func TestServiceAskUsesContextOrdinalFollowup(t *testing.T) {
 	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
 		pods: []Pod{
@@ -392,4 +434,32 @@ func vectorPayload(samples ...vectorSample) json.RawMessage {
 		parts = append(parts, fmt.Sprintf(`{"metric":%s,"value":[123,%q]}`, metric, item.value))
 	}
 	return json.RawMessage(fmt.Sprintf(`{"resultType":"vector","result":[%s]}`, strings.Join(parts, ",")))
+}
+
+func hasFact(facts []Fact, label string, value string) bool {
+	for _, fact := range facts {
+		if fact.Label == label && fact.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func podsFromFacts(facts []Fact) []string {
+	pods := []string{}
+	for _, fact := range facts {
+		if fact.Label == "Pod" {
+			pods = append(pods, fact.Value)
+		}
+	}
+	return pods
 }
