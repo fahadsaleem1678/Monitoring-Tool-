@@ -162,6 +162,54 @@ func TestServiceAskFindsPodNamedQuestion(t *testing.T) {
 	}
 }
 
+func TestServiceAskListsUnhealthyPods(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{
+			{Name: "healthy-api-6c7d", Phase: "Running"},
+			{Name: "broken-api-5d8c", Phase: "Running", RestartCount: 4, WaitingReasons: []string{"CrashLoopBackOff"}},
+			{Name: "oversized-api-9a1b", Phase: "Pending"},
+		},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "which pods are failing?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "unhealthy_pods" {
+		t.Fatalf("intent = %q, want unhealthy_pods", response.Intent)
+	}
+	for _, expected := range []string{"broken-api-5d8c", "CrashLoopBackOff", "oversized-api-9a1b", "Pending"} {
+		if !strings.Contains(response.Answer, expected) {
+			t.Fatalf("answer %q did not include %q", response.Answer, expected)
+		}
+	}
+	if strings.Contains(response.Answer, "healthy-api-6c7d") {
+		t.Fatalf("answer %q included healthy pod", response.Answer)
+	}
+}
+
+func TestServiceAskListsUnhealthyPodsHealthyState(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{{Name: "healthy-api-6c7d", Phase: "Running"}},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "show unhealthy pods")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "unhealthy_pods" {
+		t.Fatalf("intent = %q, want unhealthy_pods", response.Intent)
+	}
+	if !strings.Contains(response.Answer, "Pods look healthy") {
+		t.Fatalf("answer = %q, want healthy pod-list wording", response.Answer)
+	}
+	if response.Facts[0].Severity != "healthy" {
+		t.Fatalf("severity = %q, want healthy", response.Facts[0].Severity)
+	}
+}
+
 func TestServiceAskExplainsPodDetails(t *testing.T) {
 	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
 		pods: []Pod{

@@ -107,6 +107,9 @@ func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
 
 	intent := matchIntent(normalized)
 	if intent == nil {
+		if isUnhealthyPodListQuestion(normalized) {
+			return s.answerUnhealthyPods(ctx)
+		}
 		if isPodDetailQuestion(normalized) {
 			return s.answerPodDetail(ctx, message, normalized)
 		}
@@ -304,6 +307,23 @@ func isPodDetailQuestion(message string) bool {
 		strings.Contains(message, "exists")
 }
 
+func isUnhealthyPodListQuestion(message string) bool {
+	hasPod := strings.Contains(message, "pod")
+	hasListIntent := strings.Contains(message, "which") ||
+		strings.Contains(message, "list") ||
+		strings.Contains(message, "show") ||
+		strings.Contains(message, "tell me") ||
+		strings.Contains(message, "what")
+	hasUnhealthy := strings.Contains(message, "failing") ||
+		strings.Contains(message, "failed") ||
+		strings.Contains(message, "unhealthy") ||
+		strings.Contains(message, "bad") ||
+		strings.Contains(message, "problem") ||
+		strings.Contains(message, "broken") ||
+		strings.Contains(message, "not healthy")
+	return hasPod && hasListIntent && hasUnhealthy
+}
+
 func isMutationRestartRequest(message string) bool {
 	if !strings.Contains(message, "restart") {
 		return false
@@ -314,6 +334,51 @@ func isMutationRestartRequest(message string) bool {
 		strings.Contains(message, "rollout") ||
 		strings.Contains(message, "please restart") ||
 		strings.Contains(message, "can you restart")
+}
+
+func (s *Service) answerUnhealthyPods(ctx context.Context) (Response, error) {
+	if s.kubernetes == nil {
+		return Response{
+			Answer:      "I can count unhealthy pods, but Kubernetes pod listing is not configured for this backend yet.",
+			Intent:      IntentUnsupported,
+			Confidence:  ConfidenceLow,
+			Facts:       []Fact{},
+			Queries:     []string{},
+			Suggestions: defaultSuggestions(),
+		}, nil
+	}
+
+	pods, err := s.kubernetes.Pods(ctx, s.namespace)
+	if err != nil {
+		return Response{}, fmt.Errorf("list pods from kubernetes mcp: %w", err)
+	}
+	unhealthy := unhealthyPods(pods)
+	if len(unhealthy) == 0 {
+		return Response{
+			Answer:      fmt.Sprintf("Pods look healthy in %s. I did not find pending, failed, unknown, waiting, or restarting pods.", s.namespace),
+			Intent:      "unhealthy_pods",
+			Confidence:  ConfidenceHigh,
+			Facts:       []Fact{{Label: "Unhealthy pods", Value: "0", Severity: "healthy"}},
+			Queries:     []string{"kubernetes.pods"},
+			Suggestions: []string{"Any crash loops?", "Any image pull errors?", "Are nodes ready?"},
+		}, nil
+	}
+
+	names := make([]string, 0, len(unhealthy))
+	facts := []Fact{{Label: "Unhealthy pods", Value: fmt.Sprintf("%d", len(unhealthy)), Severity: "warning"}}
+	for _, pod := range unhealthy {
+		names = append(names, describePodShort(pod))
+		facts = append(facts, podFacts(pod)...)
+	}
+
+	return Response{
+		Answer:      fmt.Sprintf("I found %d unhealthy pod(s) in %s: %s.", len(unhealthy), s.namespace, strings.Join(names, "; ")),
+		Intent:      "unhealthy_pods",
+		Confidence:  ConfidenceHigh,
+		Facts:       limitFacts(facts, 18),
+		Queries:     []string{"kubernetes.pods"},
+		Suggestions: podNameSuggestions(unhealthy),
+	}, nil
 }
 
 func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normalizedMessage string) (Response, error) {
@@ -377,6 +442,40 @@ func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normaliz
 		Queries:     []string{"kubernetes.pods", "kubernetes.events", "kubernetes.logs"},
 		Suggestions: []string{"Any crash loops?", "Any image pull errors?", "Which pods are restarting?"},
 	}, nil
+}
+
+func unhealthyPods(pods []Pod) []Pod {
+	result := []Pod{}
+	for _, pod := range pods {
+		if pod.Name == "" {
+			continue
+		}
+		if pod.Phase != "Running" || pod.RestartCount > 0 || len(pod.WaitingReasons) > 0 {
+			result = append(result, pod)
+		}
+	}
+	return result
+}
+
+func describePodShort(pod Pod) string {
+	parts := []string{pod.Name}
+	if pod.Phase != "" {
+		parts = append(parts, "phase "+pod.Phase)
+	}
+	if pod.RestartCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d restart(s)", pod.RestartCount))
+	}
+	if len(pod.WaitingReasons) > 0 {
+		parts = append(parts, strings.Join(pod.WaitingReasons, ", "))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func limitFacts(facts []Fact, limit int) []Fact {
+	if limit <= 0 || len(facts) <= limit {
+		return facts
+	}
+	return facts[:limit]
 }
 
 func matchPodFromMessage(originalMessage, normalizedMessage string, pods []Pod) (Pod, bool) {
