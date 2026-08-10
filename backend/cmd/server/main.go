@@ -16,6 +16,7 @@ import (
 	"monitoring-tool/backend/internal/config"
 	"monitoring-tool/backend/internal/health"
 	"monitoring-tool/backend/internal/httpapi"
+	"monitoring-tool/backend/internal/kubernetesmcp"
 	"monitoring-tool/backend/internal/live"
 	"monitoring-tool/backend/internal/notify"
 	promclient "monitoring-tool/backend/internal/prometheus"
@@ -51,7 +52,8 @@ func main() {
 	healthHandler := health.NewHandler(cfg, prom)
 	authHandler := httpapi.NewAuthHandler(appStore, authService)
 	metricsHandler := httpapi.NewMetricsHandler(prom)
-	chatService := chat.NewService(prom, "monitoring-tool")
+	kubernetesMCP := kubernetesmcp.New(cfg.KubernetesMCPURL, cfg.PrometheusTimeout)
+	chatService := chat.NewService(prom, "monitoring-tool").WithKubernetes(chatKubernetesReader{kubernetesMCP}, cfg.MaxLogLines)
 	chatHandler := httpapi.NewChatHandler(chatService)
 	dashboardHandler := httpapi.NewDashboardHandler(appStore, prom)
 	liveManager := live.NewManager(prom, authService, logger)
@@ -129,6 +131,55 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("backend stopped")
+}
+
+type chatKubernetesReader struct {
+	client *kubernetesmcp.Client
+}
+
+func (r chatKubernetesReader) Pods(ctx context.Context, namespace string) ([]chat.Pod, error) {
+	pods, err := r.client.Pods(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]chat.Pod, 0, len(pods))
+	for _, pod := range pods {
+		result = append(result, chat.Pod{
+			Namespace:      pod.Namespace,
+			Name:           pod.Name,
+			Phase:          pod.Phase,
+			RestartCount:   pod.RestartCount,
+			WaitingReasons: pod.WaitingReasons,
+		})
+	}
+	return result, nil
+}
+
+func (r chatKubernetesReader) Events(ctx context.Context, namespace string) ([]chat.Event, error) {
+	events, err := r.client.Events(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]chat.Event, 0, len(events))
+	for _, event := range events {
+		result = append(result, chat.Event{
+			Namespace:     event.Namespace,
+			Name:          event.Name,
+			Reason:        event.Reason,
+			Message:       event.Message,
+			Type:          event.Type,
+			LastTimestamp: event.LastTimestamp,
+		})
+	}
+	return result, nil
+}
+
+func (r chatKubernetesReader) Logs(ctx context.Context, namespace, pod string, tailLines int) (chat.Logs, error) {
+	logs, err := r.client.Logs(ctx, namespace, pod, tailLines)
+	if err != nil {
+		return chat.Logs{}, err
+	}
+	return chat.Logs{Namespace: logs.Namespace, Pod: logs.Pod, Preview: logs.Preview}, nil
 }
 
 func prometheusSmokeHandler(prom *promclient.Client, query string) http.HandlerFunc {

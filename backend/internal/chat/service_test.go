@@ -12,12 +12,30 @@ type fakeQuerier struct {
 	results map[string]json.RawMessage
 }
 
+type fakeKubernetes struct {
+	pods   []Pod
+	events []Event
+	logs   Logs
+}
+
 func (f fakeQuerier) InstantQuery(_ context.Context, query string) (json.RawMessage, error) {
 	result, ok := f.results[query]
 	if !ok {
 		return nil, fmt.Errorf("unexpected query %s", query)
 	}
 	return result, nil
+}
+
+func (f fakeKubernetes) Pods(_ context.Context, _ string) ([]Pod, error) {
+	return f.pods, nil
+}
+
+func (f fakeKubernetes) Events(_ context.Context, _ string) ([]Event, error) {
+	return f.events, nil
+}
+
+func (f fakeKubernetes) Logs(_ context.Context, _, _ string, _ int) (Logs, error) {
+	return f.logs, nil
 }
 
 func TestServiceAskMatchesCrashLoops(t *testing.T) {
@@ -103,6 +121,59 @@ func TestServiceAskRejectsEmptyAndLongMessages(t *testing.T) {
 
 	if _, err := service.Ask(context.Background(), strings.Repeat("x", maxMessageLength+1)); err == nil {
 		t.Fatal("expected long message error")
+	}
+}
+
+func TestServiceAskExplainsPodDetails(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{
+			{
+				Namespace:      "monitoring-tool",
+				Name:           "broken-api-5d8c",
+				Phase:          "Running",
+				RestartCount:   5,
+				WaitingReasons: []string{"CrashLoopBackOff"},
+			},
+		},
+		events: []Event{
+			{Reason: "BackOff", Message: "Back-off restarting failed container broken-api in pod broken-api-5d8c"},
+		},
+		logs: Logs{Pod: "broken-api-5d8c", Preview: "fatal config missing\nprocess exited"},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "why is broken-api failing?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "pod_details" {
+		t.Fatalf("intent = %q, want pod_details", response.Intent)
+	}
+	for _, expected := range []string{"broken-api-5d8c", "CrashLoopBackOff", "BackOff", "fatal config missing"} {
+		if !strings.Contains(response.Answer, expected) {
+			t.Fatalf("answer %q did not include %q", response.Answer, expected)
+		}
+	}
+	if len(response.Queries) != 3 {
+		t.Fatalf("queries length = %d, want 3", len(response.Queries))
+	}
+}
+
+func TestServiceAskPodDetailsSuggestsKnownPodsWhenNoMatch(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{{Name: "broken-api-5d8c"}},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "show details for unknown-api")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Confidence != ConfidenceLow {
+		t.Fatalf("confidence = %q, want low", response.Confidence)
+	}
+	if len(response.Suggestions) == 0 || !strings.Contains(response.Suggestions[0], "broken-api-5d8c") {
+		t.Fatalf("suggestions = %#v, want known pod suggestion", response.Suggestions)
 	}
 }
 

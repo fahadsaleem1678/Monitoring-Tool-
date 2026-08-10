@@ -20,6 +20,8 @@ type Config struct {
 	PrometheusURL        string
 	PrometheusTimeout    time.Duration
 	PrometheusSmokeQuery string
+	KubernetesMCPURL     string
+	MaxLogLines          int
 	AlertEvalInterval    time.Duration
 	SlackWebhookURL      string
 	AgentServiceToken    string
@@ -39,6 +41,8 @@ func Load() Config {
 		PrometheusURL:        trimRightSlash(env("PROMETHEUS_URL", "http://localhost:9090")),
 		PrometheusTimeout:    envDurationSeconds("PROMETHEUS_TIMEOUT_SECONDS", 10),
 		PrometheusSmokeQuery: env("PROMETHEUS_SMOKE_QUERY", "up"),
+		KubernetesMCPURL:     trimRightSlash(env("KUBERNETES_MCP_URL", "http://kubernetes-mcp:8091")),
+		MaxLogLines:          envInt("MAX_LOG_LINES", 80),
 		AlertEvalInterval:    envDurationSeconds("ALERT_EVAL_INTERVAL_SECONDS", 15),
 		SlackWebhookURL:      env("SLACK_WEBHOOK_URL", ""),
 		AgentServiceToken:    env("AGENT_SERVICE_TOKEN", "dev-agent-token"),
@@ -65,6 +69,18 @@ func envDurationSeconds(key string, fallback int) time.Duration {
 		return time.Duration(fallback) * time.Second
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func envLogLevel(key string, fallback slog.Level) slog.Level {

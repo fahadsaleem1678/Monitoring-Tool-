@@ -21,9 +21,40 @@ type PrometheusQuerier interface {
 	InstantQuery(ctx context.Context, query string) (json.RawMessage, error)
 }
 
+type KubernetesReader interface {
+	Pods(ctx context.Context, namespace string) ([]Pod, error)
+	Events(ctx context.Context, namespace string) ([]Event, error)
+	Logs(ctx context.Context, namespace, pod string, tailLines int) (Logs, error)
+}
+
 type Service struct {
-	prometheus PrometheusQuerier
-	namespace  string
+	prometheus  PrometheusQuerier
+	kubernetes  KubernetesReader
+	namespace   string
+	maxLogLines int
+}
+
+type Pod struct {
+	Namespace      string
+	Name           string
+	Phase          string
+	RestartCount   int
+	WaitingReasons []string
+}
+
+type Event struct {
+	Namespace     string
+	Name          string
+	Reason        string
+	Message       string
+	Type          string
+	LastTimestamp string
+}
+
+type Logs struct {
+	Namespace string
+	Pod       string
+	Preview   string
 }
 
 type Response struct {
@@ -57,7 +88,15 @@ func NewService(prometheus PrometheusQuerier, namespace string) *Service {
 	if namespace == "" {
 		namespace = defaultNamespace
 	}
-	return &Service{prometheus: prometheus, namespace: namespace}
+	return &Service{prometheus: prometheus, namespace: namespace, maxLogLines: 80}
+}
+
+func (s *Service) WithKubernetes(kubernetes KubernetesReader, maxLogLines int) *Service {
+	s.kubernetes = kubernetes
+	if maxLogLines > 0 {
+		s.maxLogLines = maxLogLines
+	}
+	return s
 }
 
 func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
@@ -68,6 +107,9 @@ func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
 
 	intent := matchIntent(normalized)
 	if intent == nil {
+		if isPodDetailQuestion(normalized) {
+			return s.answerPodDetail(ctx, message, normalized)
+		}
 		return unsupportedResponse(), nil
 	}
 
@@ -246,6 +288,181 @@ func suggestionsFor(intent string) []string {
 	default:
 		return defaultSuggestions()
 	}
+}
+
+func isPodDetailQuestion(message string) bool {
+	return strings.Contains(message, "why") ||
+		strings.Contains(message, "detail") ||
+		strings.Contains(message, "failing") ||
+		strings.Contains(message, "logs") ||
+		strings.Contains(message, "events")
+}
+
+func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normalizedMessage string) (Response, error) {
+	if s.kubernetes == nil {
+		return Response{
+			Answer:      "I can identify cluster health issues, but Kubernetes pod details are not configured for this backend yet.",
+			Intent:      IntentUnsupported,
+			Confidence:  ConfidenceLow,
+			Facts:       []Fact{},
+			Queries:     []string{},
+			Suggestions: []string{"Any crash loops?", "Any pending pods?", "Any image pull errors?"},
+		}, nil
+	}
+
+	pods, err := s.kubernetes.Pods(ctx, s.namespace)
+	if err != nil {
+		return Response{}, fmt.Errorf("list pods from kubernetes mcp: %w", err)
+	}
+	pod, ok := matchPodFromMessage(originalMessage, normalizedMessage, pods)
+	if !ok {
+		return Response{
+			Answer:      "I could not match that question to a pod name in the monitoring-tool namespace.",
+			Intent:      "pod_details",
+			Confidence:  ConfidenceLow,
+			Facts:       []Fact{},
+			Queries:     []string{"kubernetes.pods"},
+			Suggestions: podNameSuggestions(pods),
+		}, nil
+	}
+
+	events, eventsErr := s.kubernetes.Events(ctx, s.namespace)
+	logs, logsErr := s.kubernetes.Logs(ctx, s.namespace, pod.Name, s.maxLogLines)
+
+	answerParts := []string{fmt.Sprintf("%s is %s", pod.Name, emptyFallback(pod.Phase, "unknown phase"))}
+	if pod.RestartCount > 0 {
+		answerParts = append(answerParts, fmt.Sprintf("restart count is %d", pod.RestartCount))
+	}
+	if len(pod.WaitingReasons) > 0 {
+		answerParts = append(answerParts, fmt.Sprintf("waiting reason: %s", strings.Join(pod.WaitingReasons, ", ")))
+	}
+	if event := mostRecentPodEvent(pod.Name, events); event != nil {
+		answerParts = append(answerParts, fmt.Sprintf("latest event: %s - %s", emptyFallback(event.Reason, "event"), event.Message))
+	} else if eventsErr != nil {
+		answerParts = append(answerParts, "events were not available")
+	}
+	if strings.TrimSpace(logs.Preview) != "" {
+		answerParts = append(answerParts, "recent logs: "+singleLinePreview(logs.Preview, 260))
+	} else if logsErr != nil {
+		answerParts = append(answerParts, "logs were not available")
+	}
+
+	return Response{
+		Answer:      strings.Join(answerParts, ". ") + ".",
+		Intent:      "pod_details",
+		Confidence:  ConfidenceHigh,
+		Facts:       podFacts(pod),
+		Queries:     []string{"kubernetes.pods", "kubernetes.events", "kubernetes.logs"},
+		Suggestions: []string{"Any crash loops?", "Any image pull errors?", "Which pods are restarting?"},
+	}, nil
+}
+
+func matchPodFromMessage(originalMessage, normalizedMessage string, pods []Pod) (Pod, bool) {
+	compactOriginal := compactName(originalMessage)
+	compactNormalized := compactName(normalizedMessage)
+	best := Pod{}
+	bestScore := 0
+	for _, pod := range pods {
+		compactPod := compactName(pod.Name)
+		if compactPod == "" {
+			continue
+		}
+		score := 0
+		if strings.Contains(compactOriginal, compactPod) || strings.Contains(compactNormalized, compactPod) {
+			score = len(compactPod)
+		} else {
+			for _, token := range strings.Fields(normalizedMessage) {
+				compactToken := compactName(token)
+				if len(compactToken) >= 4 && strings.Contains(compactPod, compactToken) {
+					score = len(compactToken)
+				}
+			}
+		}
+		if score > bestScore {
+			best = pod
+			bestScore = score
+		}
+	}
+	return best, bestScore > 0
+}
+
+func compactName(value string) string {
+	var builder strings.Builder
+	for _, char := range strings.ToLower(value) {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			builder.WriteRune(char)
+		}
+	}
+	return builder.String()
+}
+
+func mostRecentPodEvent(podName string, events []Event) *Event {
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		if strings.Contains(event.Name, podName) || strings.Contains(event.Message, podName) {
+			return &event
+		}
+	}
+	return nil
+}
+
+func podFacts(pod Pod) []Fact {
+	facts := []Fact{
+		{Label: "Pod", Value: pod.Name, Severity: "healthy"},
+		{Label: "Phase", Value: emptyFallback(pod.Phase, "unknown"), Severity: severityForPod(pod)},
+		{Label: "Restarts", Value: fmt.Sprintf("%d", pod.RestartCount), Severity: severityForRestarts(pod.RestartCount)},
+	}
+	if len(pod.WaitingReasons) > 0 {
+		facts = append(facts, Fact{Label: "Waiting reason", Value: strings.Join(pod.WaitingReasons, ", "), Severity: "warning"})
+	}
+	return facts
+}
+
+func podNameSuggestions(pods []Pod) []string {
+	suggestions := []string{}
+	for _, pod := range pods {
+		if pod.Name == "" {
+			continue
+		}
+		suggestions = append(suggestions, "Show details for "+pod.Name)
+		if len(suggestions) == 4 {
+			break
+		}
+	}
+	if len(suggestions) == 0 {
+		return defaultSuggestions()
+	}
+	return suggestions
+}
+
+func severityForPod(pod Pod) string {
+	if pod.Phase != "Running" || len(pod.WaitingReasons) > 0 {
+		return "warning"
+	}
+	return "healthy"
+}
+
+func severityForRestarts(count int) string {
+	if count > 0 {
+		return "warning"
+	}
+	return "healthy"
+}
+
+func emptyFallback(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func singleLinePreview(value string, limit int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if limit > 0 && len(value) > limit {
+		return value[:limit] + "..."
+	}
+	return value
 }
 
 var intents = []intentDefinition{
