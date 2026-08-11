@@ -116,6 +116,9 @@ func (s *Service) AskWithContext(ctx context.Context, message string, chatContex
 
 	intent := matchIntent(normalized)
 	if intent == nil {
+		if isPrioritySummaryQuestion(normalized) {
+			return s.answerPrioritySummary(ctx)
+		}
 		if isAllPodListQuestion(normalized) {
 			return s.answerAllPods(ctx)
 		}
@@ -348,6 +351,17 @@ func isFollowUpPodQuestion(message string) bool {
 		strings.Contains(message, "third one")
 }
 
+func isPrioritySummaryQuestion(message string) bool {
+	return strings.Contains(message, "fix first") ||
+		strings.Contains(message, "most serious") ||
+		strings.Contains(message, "highest priority") ||
+		strings.Contains(message, "priority") ||
+		strings.Contains(message, "summarize cluster") ||
+		strings.Contains(message, "cluster problems") ||
+		strings.Contains(message, "health report") ||
+		strings.Contains(message, "quick report")
+}
+
 func isUnhealthyPodListQuestion(message string) bool {
 	hasPod := strings.Contains(message, "pod")
 	hasListIntent := strings.Contains(message, "which") ||
@@ -391,6 +405,57 @@ func isMutationRestartRequest(message string) bool {
 		strings.Contains(message, "rollout") ||
 		strings.Contains(message, "please restart") ||
 		strings.Contains(message, "can you restart")
+}
+
+func (s *Service) answerPrioritySummary(ctx context.Context) (Response, error) {
+	if s.kubernetes == nil {
+		return Response{
+			Answer:      "I can summarize basic metrics, but Kubernetes pod details are not configured for this backend yet.",
+			Intent:      IntentUnsupported,
+			Confidence:  ConfidenceLow,
+			Facts:       []Fact{},
+			Queries:     []string{},
+			Suggestions: defaultSuggestions(),
+		}, nil
+	}
+
+	pods, err := s.kubernetes.Pods(ctx, s.namespace)
+	if err != nil {
+		return Response{}, fmt.Errorf("list pods from kubernetes mcp: %w", err)
+	}
+	problems := rankedPodProblems(pods)
+	if len(problems) == 0 {
+		return Response{
+			Answer:      fmt.Sprintf("I do not see urgent pod problems in %s. Pods are running without waiting reasons or restarts.", s.namespace),
+			Intent:      "cluster_priority_summary",
+			Confidence:  ConfidenceHigh,
+			Facts:       []Fact{{Label: "Priority issues", Value: "0", Severity: "healthy"}},
+			Queries:     []string{"kubernetes.pods"},
+			Suggestions: []string{"List all pods", "Are nodes ready?", "Any image pull errors?"},
+		}, nil
+	}
+
+	if len(problems) > 5 {
+		problems = problems[:5]
+	}
+	lines := make([]string, 0, len(problems))
+	facts := []Fact{{Label: "Priority issues", Value: fmt.Sprintf("%d", len(problems)), Severity: "warning"}}
+	contextPods := make([]Pod, 0, len(problems))
+	for index, problem := range problems {
+		lines = append(lines, fmt.Sprintf("Priority %d: %s", index+1, problem.summary))
+		facts = append(facts, Fact{Label: "Pod", Value: problem.pod.Name, Severity: problem.severity})
+		facts = append(facts, Fact{Label: "Reason", Value: problem.reason, Severity: problem.severity})
+		contextPods = append(contextPods, problem.pod)
+	}
+
+	return Response{
+		Answer:      strings.Join(lines, ". ") + ".",
+		Intent:      "cluster_priority_summary",
+		Confidence:  ConfidenceHigh,
+		Facts:       limitFacts(facts, 20),
+		Queries:     []string{"kubernetes.pods"},
+		Suggestions: podNameSuggestions(contextPods),
+	}, nil
 }
 
 func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
@@ -594,6 +659,72 @@ func findPodByName(pods []Pod, name string) (Pod, bool) {
 		}
 	}
 	return Pod{}, false
+}
+
+type podProblem struct {
+	pod      Pod
+	score    int
+	reason   string
+	severity string
+	summary  string
+}
+
+func rankedPodProblems(pods []Pod) []podProblem {
+	problems := []podProblem{}
+	for _, pod := range pods {
+		problem, ok := podProblemFor(pod)
+		if ok {
+			problems = append(problems, problem)
+		}
+	}
+	for i := 0; i < len(problems); i++ {
+		for j := i + 1; j < len(problems); j++ {
+			if problems[j].score > problems[i].score {
+				problems[i], problems[j] = problems[j], problems[i]
+			}
+		}
+	}
+	return problems
+}
+
+func podProblemFor(pod Pod) (podProblem, bool) {
+	if pod.Name == "" {
+		return podProblem{}, false
+	}
+	waiting := strings.Join(pod.WaitingReasons, ", ")
+	if containsWaitingReason(pod, "CrashLoopBackOff") {
+		return newPodProblem(pod, 100, "CrashLoopBackOff", "error", fmt.Sprintf("%s is in CrashLoopBackOff with %d restart(s)", pod.Name, pod.RestartCount)), true
+	}
+	if containsWaitingReason(pod, "ImagePullBackOff") || containsWaitingReason(pod, "ErrImagePull") {
+		return newPodProblem(pod, 90, emptyFallback(waiting, "ImagePullBackOff"), "error", fmt.Sprintf("%s has image pull failure: %s", pod.Name, emptyFallback(waiting, "image pull error"))), true
+	}
+	if pod.Phase == "Pending" {
+		return newPodProblem(pod, 80, "Pending", "warning", fmt.Sprintf("%s is Pending and may be unschedulable", pod.Name)), true
+	}
+	if pod.Phase == "Failed" || pod.Phase == "Unknown" {
+		return newPodProblem(pod, 75, pod.Phase, "error", fmt.Sprintf("%s is %s", pod.Name, pod.Phase)), true
+	}
+	if len(pod.WaitingReasons) > 0 {
+		return newPodProblem(pod, 70, waiting, "warning", fmt.Sprintf("%s is waiting: %s", pod.Name, waiting)), true
+	}
+	if pod.RestartCount > 0 {
+		score := 50 + pod.RestartCount
+		return newPodProblem(pod, score, "Restarts", "warning", fmt.Sprintf("%s restarted %d time(s)", pod.Name, pod.RestartCount)), true
+	}
+	return podProblem{}, false
+}
+
+func newPodProblem(pod Pod, score int, reason, severity, summary string) podProblem {
+	return podProblem{pod: pod, score: score, reason: reason, severity: severity, summary: summary}
+}
+
+func containsWaitingReason(pod Pod, reason string) bool {
+	for _, waitingReason := range pod.WaitingReasons {
+		if strings.EqualFold(waitingReason, reason) {
+			return true
+		}
+	}
+	return false
 }
 
 func unhealthyPods(pods []Pod) []Pod {

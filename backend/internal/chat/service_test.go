@@ -279,6 +279,62 @@ func TestServiceAskListsUnhealthyPodsHealthyState(t *testing.T) {
 	}
 }
 
+func TestServiceAskPrioritizesClusterProblems(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{
+			{Name: "healthy-api-6c7d", Phase: "Running"},
+			{Name: "pending-api-9a1b", Phase: "Pending"},
+			{Name: "bad-image-api-2c3d", Phase: "Pending", WaitingReasons: []string{"ImagePullBackOff"}},
+			{Name: "broken-api-5d8c", Phase: "Running", RestartCount: 5, WaitingReasons: []string{"CrashLoopBackOff"}},
+		},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "what should I fix first?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "cluster_priority_summary" {
+		t.Fatalf("intent = %q, want cluster_priority_summary", response.Intent)
+	}
+	for _, expected := range []string{
+		"Priority 1: broken-api-5d8c is in CrashLoopBackOff",
+		"Priority 2: bad-image-api-2c3d has image pull failure",
+		"Priority 3: pending-api-9a1b is Pending",
+	} {
+		if !strings.Contains(response.Answer, expected) {
+			t.Fatalf("answer %q did not include %q", response.Answer, expected)
+		}
+	}
+	if !hasFact(response.Facts, "Pod", "broken-api-5d8c") {
+		t.Fatalf("facts = %#v, want priority pod fact", response.Facts)
+	}
+	if !containsString(response.Suggestions, "Show details for broken-api-5d8c") {
+		t.Fatalf("suggestions = %#v, want pod detail suggestion", response.Suggestions)
+	}
+}
+
+func TestServiceAskPrioritySummaryHealthy(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		pods: []Pod{{Name: "healthy-api-6c7d", Phase: "Running"}},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "quick health report")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "cluster_priority_summary" {
+		t.Fatalf("intent = %q, want cluster_priority_summary", response.Intent)
+	}
+	if !strings.Contains(response.Answer, "do not see urgent pod problems") {
+		t.Fatalf("answer = %q, want healthy priority wording", response.Answer)
+	}
+	if response.Facts[0].Severity != "healthy" {
+		t.Fatalf("severity = %q, want healthy", response.Facts[0].Severity)
+	}
+}
+
 func TestServiceAskExplainsPodDetails(t *testing.T) {
 	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
 		pods: []Pod{
