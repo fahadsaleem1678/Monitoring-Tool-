@@ -13,9 +13,10 @@ type fakeQuerier struct {
 }
 
 type fakeKubernetes struct {
-	pods   []Pod
-	events []Event
-	logs   Logs
+	pods    []Pod
+	podsErr error
+	events  []Event
+	logs    Logs
 }
 
 type fakeIntentRouter struct {
@@ -34,6 +35,9 @@ func (f fakeQuerier) InstantQuery(_ context.Context, query string) (json.RawMess
 }
 
 func (f fakeKubernetes) Pods(_ context.Context, _ string) ([]Pod, error) {
+	if f.podsErr != nil {
+		return nil, f.podsErr
+	}
 	return f.pods, nil
 }
 
@@ -406,6 +410,45 @@ func TestServiceAskPrioritySummaryHealthy(t *testing.T) {
 	}
 	if response.Facts[0].Severity != "healthy" {
 		t.Fatalf("severity = %q, want healthy", response.Facts[0].Severity)
+	}
+}
+
+func TestServiceAskPrioritySummaryFallsBackToPrometheus(t *testing.T) {
+	service := NewService(fakeQuerier{
+		results: map[string]json.RawMessage{
+			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vectorPayload(
+				sample(map[string]string{"pod": "broken-api-5d8c"}, "1"),
+			),
+			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason=~"ImagePullBackOff|ErrImagePull"})`: vectorPayload(),
+			`sum by (pod) (kube_pod_status_phase{namespace="monitoring-tool",phase="Pending"})`: vectorPayload(),
+			`sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace="monitoring-tool"}[5m]))`: vectorPayload(),
+			`sum(kube_node_status_condition{condition="Ready",status="true"})`: vectorPayload(
+				sample(map[string]string{}, "1"),
+			),
+		},
+	}, "monitoring-tool").WithKubernetes(fakeKubernetes{podsErr: fmt.Errorf("timeout")}, 80)
+
+	response, err := service.Ask(context.Background(), "summarize cluster problems")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "cluster_priority_summary" {
+		t.Fatalf("intent = %q, want cluster_priority_summary", response.Intent)
+	}
+	if response.Confidence != ConfidenceLow {
+		t.Fatalf("confidence = %q, want low", response.Confidence)
+	}
+	for _, expected := range []string{"Kubernetes pod listing timed out", "CrashLoopBackOff", "broken-api-5d8c"} {
+		if !strings.Contains(response.Answer, expected) {
+			t.Fatalf("answer %q did not include %q", response.Answer, expected)
+		}
+	}
+	if strings.Contains(response.Answer, "kubernetes mcp") || strings.Contains(response.Answer, "Client.Timeout") {
+		t.Fatalf("answer %q exposed raw backend error", response.Answer)
+	}
+	if !hasFact(response.Facts, "Priority report", "Prometheus fallback") {
+		t.Fatalf("facts = %#v, want fallback fact", response.Facts)
 	}
 }
 

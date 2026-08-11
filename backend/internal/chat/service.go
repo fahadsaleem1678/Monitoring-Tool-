@@ -498,7 +498,7 @@ func (s *Service) answerPrioritySummary(ctx context.Context) (Response, error) {
 
 	pods, err := s.kubernetes.Pods(ctx, s.namespace)
 	if err != nil {
-		return Response{}, fmt.Errorf("list pods from kubernetes mcp: %w", err)
+		return s.answerPrioritySummaryFromMetrics(ctx)
 	}
 	problems := rankedPodProblems(pods)
 	if len(problems) == 0 {
@@ -535,6 +535,70 @@ func (s *Service) answerPrioritySummary(ctx context.Context) (Response, error) {
 		Queries:     []string{"kubernetes.pods"},
 		Suggestions: podNameSuggestions(contextPods),
 	}, nil
+}
+
+func (s *Service) answerPrioritySummaryFromMetrics(ctx context.Context) (Response, error) {
+	if s.prometheus == nil {
+		return Response{
+			Answer:      "I could not list pods from Kubernetes MCP right now, so I could not build the full priority report. Try again in a moment or ask a focused metric question.",
+			Intent:      "cluster_priority_summary",
+			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
+			Facts:       []Fact{{Label: "Priority report", Value: "Kubernetes MCP unavailable", Severity: "warning"}},
+			Queries:     []string{"kubernetes.pods"},
+			Suggestions: defaultSuggestions(),
+		}, nil
+	}
+
+	orderedIntents := []string{"pod_crashloops", "pod_image_pull_errors", "pod_pending", "pod_restarts", "node_ready"}
+	lines := []string{}
+	facts := []Fact{{Label: "Priority report", Value: "Prometheus fallback", Severity: "warning"}}
+	queries := []string{"kubernetes.pods"}
+	for _, intentID := range orderedIntents {
+		intent := intentByID(intentID)
+		if intent == nil {
+			continue
+		}
+		query := intent.query(s.namespace)
+		queries = append(queries, query)
+		raw, err := s.prometheus.InstantQuery(ctx, query)
+		if err != nil {
+			continue
+		}
+		result, err := readVector(raw)
+		if err != nil {
+			continue
+		}
+		count := int(math.Round(result.total))
+		names := result.nonzeroLabels(intent.seriesLabel)
+		severity, answer := formatIntentAnswer(intent, count, s.namespace, names)
+		facts = append(facts, Fact{Label: intent.label, Value: fmt.Sprintf("%d", count), Severity: severity})
+		if metricIntentNeedsAttention(intent, count) {
+			lines = append(lines, answer)
+		}
+	}
+
+	if len(lines) == 0 {
+		lines = append(lines, "I could not list pods from Kubernetes MCP, but the Prometheus checks I could run did not show urgent pod problems.")
+	} else {
+		lines = append([]string{"Kubernetes pod listing timed out, so I used Prometheus metrics for this summary."}, lines...)
+	}
+	return Response{
+		Answer:      strings.Join(lines, " "),
+		Intent:      "cluster_priority_summary",
+		Confidence:  ConfidenceLow,
+		Engine:      "deterministic",
+		Facts:       limitFacts(facts, 12),
+		Queries:     queries,
+		Suggestions: []string{"Any crash loops?", "Any image pull errors?", "Which pods are restarting?"},
+	}, nil
+}
+
+func metricIntentNeedsAttention(intent *intentDefinition, count int) bool {
+	if intent.healthyWhenPositive {
+		return count == 0
+	}
+	return count > 0
 }
 
 func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
