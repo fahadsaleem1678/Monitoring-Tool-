@@ -22,6 +22,15 @@ type Config struct {
 	PrometheusSmokeQuery string
 	KubernetesMCPURL     string
 	MaxLogLines          int
+	AssistantLLMEnabled  bool
+	LLMProvider          string
+	OpenAIBaseURL        string
+	OpenAIModel          string
+	OpenAIAPIKey         string
+	OpenAITimeout        time.Duration
+	OllamaURL            string
+	OllamaModel          string
+	OllamaTimeout        time.Duration
 	AlertEvalInterval    time.Duration
 	SlackWebhookURL      string
 	AgentServiceToken    string
@@ -43,6 +52,15 @@ func Load() Config {
 		PrometheusSmokeQuery: env("PROMETHEUS_SMOKE_QUERY", "up"),
 		KubernetesMCPURL:     trimRightSlash(env("KUBERNETES_MCP_URL", "http://kubernetes-mcp:8091")),
 		MaxLogLines:          envInt("MAX_LOG_LINES", 80),
+		AssistantLLMEnabled:  envBool("ASSISTANT_LLM_ENABLED", false),
+		LLMProvider:          strings.ToLower(env("LLM_PROVIDER", "ollama")),
+		OpenAIBaseURL:        trimRightSlash(env("OPENAI_BASE_URL", "https://api.openai.com/v1")),
+		OpenAIModel:          env("OPENAI_MODEL", "gpt-4.1-mini"),
+		OpenAIAPIKey:         env("OPENAI_API_KEY", ""),
+		OpenAITimeout:        envDurationSeconds("OPENAI_TIMEOUT_SECONDS", 30),
+		OllamaURL:            trimRightSlash(env("OLLAMA_URL", "http://host.docker.internal:11434")),
+		OllamaModel:          env("OLLAMA_MODEL", "qwen2.5:7b"),
+		OllamaTimeout:        envDurationSeconds("OLLAMA_TIMEOUT_SECONDS", 30),
 		AlertEvalInterval:    envDurationSeconds("ALERT_EVAL_INTERVAL_SECONDS", 15),
 		SlackWebhookURL:      env("SLACK_WEBHOOK_URL", ""),
 		AgentServiceToken:    env("AGENT_SERVICE_TOKEN", "dev-agent-token"),
@@ -81,6 +99,21 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func envLogLevel(key string, fallback slog.Level) slog.Level {

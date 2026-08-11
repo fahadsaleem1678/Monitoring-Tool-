@@ -27,9 +27,14 @@ type KubernetesReader interface {
 	Logs(ctx context.Context, namespace, pod string, tailLines int) (Logs, error)
 }
 
+type IntentRouter interface {
+	Route(ctx context.Context, message string, chatContext Context, intents []string) (string, error)
+}
+
 type Service struct {
 	prometheus  PrometheusQuerier
 	kubernetes  KubernetesReader
+	router      IntentRouter
 	namespace   string
 	maxLogLines int
 }
@@ -61,6 +66,7 @@ type Response struct {
 	Answer      string   `json:"answer"`
 	Intent      string   `json:"intent"`
 	Confidence  string   `json:"confidence"`
+	Engine      string   `json:"engine"`
 	Facts       []Fact   `json:"facts"`
 	Queries     []string `json:"queries"`
 	Suggestions []string `json:"suggestions"`
@@ -104,6 +110,11 @@ func (s *Service) WithKubernetes(kubernetes KubernetesReader, maxLogLines int) *
 	return s
 }
 
+func (s *Service) WithIntentRouter(router IntentRouter) *Service {
+	s.router = router
+	return s
+}
+
 func (s *Service) Ask(ctx context.Context, message string) (Response, error) {
 	return s.AskWithContext(ctx, message, Context{})
 }
@@ -128,9 +139,32 @@ func (s *Service) AskWithContext(ctx context.Context, message string, chatContex
 		if isPodDetailQuestion(normalized) || isFollowUpPodQuestion(normalized) {
 			return s.answerPodDetail(ctx, message, normalized, chatContext)
 		}
+		if s.router != nil {
+			routedIntent, err := s.router.Route(ctx, message, chatContext, routableIntentIDs())
+			if err != nil {
+				response := unsupportedResponse()
+				response.Answer = "I could not use the optional LLM router right now, and this did not match a deterministic cluster check."
+				response.Engine = "llm-unavailable"
+				return response, nil
+			}
+			if routedIntent != "" && routedIntent != IntentUnsupported {
+				response, ok, err := s.answerRoutedIntent(ctx, routedIntent, message, normalized, chatContext)
+				if err != nil {
+					return Response{}, err
+				}
+				if ok {
+					response.Engine = "llm-routed"
+					return response, nil
+				}
+			}
+		}
 		return unsupportedResponse(), nil
 	}
 
+	return s.answerMetricIntent(ctx, intent, "deterministic")
+}
+
+func (s *Service) answerMetricIntent(ctx context.Context, intent *intentDefinition, engine string) (Response, error) {
 	query := intent.query(s.namespace)
 	raw, err := s.prometheus.InstantQuery(ctx, query)
 	if err != nil {
@@ -160,10 +194,34 @@ func (s *Service) AskWithContext(ctx context.Context, message string, chatContex
 		Answer:      answer,
 		Intent:      intent.id,
 		Confidence:  ConfidenceHigh,
+		Engine:      engine,
 		Facts:       facts,
 		Queries:     []string{query},
 		Suggestions: suggestionsForIntentAndPods(intent.id, names),
 	}, nil
+}
+
+func (s *Service) answerRoutedIntent(ctx context.Context, intentID, message, normalized string, chatContext Context) (Response, bool, error) {
+	if intent := intentByID(intentID); intent != nil {
+		response, err := s.answerMetricIntent(ctx, intent, "llm-routed")
+		return response, true, err
+	}
+	switch intentID {
+	case "cluster_priority_summary":
+		response, err := s.answerPrioritySummary(ctx)
+		return response, true, err
+	case "all_pods":
+		response, err := s.answerAllPods(ctx)
+		return response, true, err
+	case "unhealthy_pods":
+		response, err := s.answerUnhealthyPods(ctx)
+		return response, true, err
+	case "pod_details":
+		response, err := s.answerPodDetail(ctx, message, normalized, chatContext)
+		return response, true, err
+	default:
+		return Response{}, false, nil
+	}
 }
 
 func formatIntentAnswer(intent *intentDefinition, count int, namespace string, names []string) (string, string) {
@@ -218,11 +276,29 @@ func matchIntent(message string) *intentDefinition {
 	return nil
 }
 
+func intentByID(intentID string) *intentDefinition {
+	for _, intent := range intents {
+		if intent.id == intentID {
+			return &intent
+		}
+	}
+	return nil
+}
+
+func routableIntentIDs() []string {
+	ids := make([]string, 0, len(intents)+5)
+	for _, intent := range intents {
+		ids = append(ids, intent.id)
+	}
+	return append(ids, "cluster_priority_summary", "all_pods", "unhealthy_pods", "pod_details", IntentUnsupported)
+}
+
 func unsupportedResponse() Response {
 	return Response{
 		Answer:      "I can only answer a focused set of read-only cluster health questions right now.",
 		Intent:      IntentUnsupported,
 		Confidence:  ConfidenceLow,
+		Engine:      "deterministic",
 		Facts:       []Fact{},
 		Queries:     []string{},
 		Suggestions: defaultSuggestions(),
@@ -413,6 +489,7 @@ func (s *Service) answerPrioritySummary(ctx context.Context) (Response, error) {
 			Answer:      "I can summarize basic metrics, but Kubernetes pod details are not configured for this backend yet.",
 			Intent:      IntentUnsupported,
 			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
 			Facts:       []Fact{},
 			Queries:     []string{},
 			Suggestions: defaultSuggestions(),
@@ -429,6 +506,7 @@ func (s *Service) answerPrioritySummary(ctx context.Context) (Response, error) {
 			Answer:      fmt.Sprintf("I do not see urgent pod problems in %s. Pods are running without waiting reasons or restarts.", s.namespace),
 			Intent:      "cluster_priority_summary",
 			Confidence:  ConfidenceHigh,
+			Engine:      "deterministic",
 			Facts:       []Fact{{Label: "Priority issues", Value: "0", Severity: "healthy"}},
 			Queries:     []string{"kubernetes.pods"},
 			Suggestions: []string{"List all pods", "Are nodes ready?", "Any image pull errors?"},
@@ -452,6 +530,7 @@ func (s *Service) answerPrioritySummary(ctx context.Context) (Response, error) {
 		Answer:      strings.Join(lines, ". ") + ".",
 		Intent:      "cluster_priority_summary",
 		Confidence:  ConfidenceHigh,
+		Engine:      "deterministic",
 		Facts:       limitFacts(facts, 20),
 		Queries:     []string{"kubernetes.pods"},
 		Suggestions: podNameSuggestions(contextPods),
@@ -464,6 +543,7 @@ func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
 			Answer:      "I can count pods, but Kubernetes pod listing is not configured for this backend yet.",
 			Intent:      IntentUnsupported,
 			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
 			Facts:       []Fact{},
 			Queries:     []string{},
 			Suggestions: defaultSuggestions(),
@@ -479,6 +559,7 @@ func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
 			Answer:      fmt.Sprintf("I did not find any pods in %s.", s.namespace),
 			Intent:      "all_pods",
 			Confidence:  ConfidenceHigh,
+			Engine:      "deterministic",
 			Facts:       []Fact{{Label: "Pods", Value: "0", Severity: "warning"}},
 			Queries:     []string{"kubernetes.pods"},
 			Suggestions: []string{"Are my pods healthy?", "Any pending pods?", "Are nodes ready?"},
@@ -495,6 +576,7 @@ func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
 		Answer:      fmt.Sprintf("I found %d pod(s) in %s: %s.", len(pods), s.namespace, strings.Join(names, "; ")),
 		Intent:      "all_pods",
 		Confidence:  ConfidenceHigh,
+		Engine:      "deterministic",
 		Facts:       limitFacts(facts, 24),
 		Queries:     []string{"kubernetes.pods"},
 		Suggestions: []string{"Which pods are failing?", "Any crash loops?", "Show details for a pod name"},
@@ -507,6 +589,7 @@ func (s *Service) answerUnhealthyPods(ctx context.Context) (Response, error) {
 			Answer:      "I can count unhealthy pods, but Kubernetes pod listing is not configured for this backend yet.",
 			Intent:      IntentUnsupported,
 			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
 			Facts:       []Fact{},
 			Queries:     []string{},
 			Suggestions: defaultSuggestions(),
@@ -523,6 +606,7 @@ func (s *Service) answerUnhealthyPods(ctx context.Context) (Response, error) {
 			Answer:      fmt.Sprintf("Pods look healthy in %s. I did not find pending, failed, unknown, waiting, or restarting pods.", s.namespace),
 			Intent:      "unhealthy_pods",
 			Confidence:  ConfidenceHigh,
+			Engine:      "deterministic",
 			Facts:       []Fact{{Label: "Unhealthy pods", Value: "0", Severity: "healthy"}},
 			Queries:     []string{"kubernetes.pods"},
 			Suggestions: []string{"Any crash loops?", "Any image pull errors?", "Are nodes ready?"},
@@ -540,6 +624,7 @@ func (s *Service) answerUnhealthyPods(ctx context.Context) (Response, error) {
 		Answer:      fmt.Sprintf("I found %d unhealthy pod(s) in %s: %s.", len(unhealthy), s.namespace, strings.Join(names, "; ")),
 		Intent:      "unhealthy_pods",
 		Confidence:  ConfidenceHigh,
+		Engine:      "deterministic",
 		Facts:       limitFacts(facts, 18),
 		Queries:     []string{"kubernetes.pods"},
 		Suggestions: podNameSuggestions(unhealthy),
@@ -552,6 +637,7 @@ func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normaliz
 			Answer:      "I can identify cluster health issues, but Kubernetes pod details are not configured for this backend yet.",
 			Intent:      IntentUnsupported,
 			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
 			Facts:       []Fact{},
 			Queries:     []string{},
 			Suggestions: []string{"Any crash loops?", "Any pending pods?", "Any image pull errors?"},
@@ -575,6 +661,7 @@ func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normaliz
 			Answer:      answer,
 			Intent:      "pod_details",
 			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
 			Facts:       []Fact{},
 			Queries:     []string{"kubernetes.pods"},
 			Suggestions: podNameSuggestions(pods),
@@ -606,6 +693,7 @@ func (s *Service) answerPodDetail(ctx context.Context, originalMessage, normaliz
 		Answer:      strings.Join(answerParts, ". ") + ".",
 		Intent:      "pod_details",
 		Confidence:  ConfidenceHigh,
+		Engine:      "deterministic",
 		Facts:       podFacts(pod),
 		Queries:     []string{"kubernetes.pods", "kubernetes.events", "kubernetes.logs"},
 		Suggestions: []string{"Any crash loops?", "Any image pull errors?", "Which pods are restarting?"},

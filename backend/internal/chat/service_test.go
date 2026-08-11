@@ -18,6 +18,13 @@ type fakeKubernetes struct {
 	logs   Logs
 }
 
+type fakeIntentRouter struct {
+	intent  string
+	err     error
+	message string
+	intents []string
+}
+
 func (f fakeQuerier) InstantQuery(_ context.Context, query string) (json.RawMessage, error) {
 	result, ok := f.results[query]
 	if !ok {
@@ -36,6 +43,12 @@ func (f fakeKubernetes) Events(_ context.Context, _ string) ([]Event, error) {
 
 func (f fakeKubernetes) Logs(_ context.Context, _, _ string, _ int) (Logs, error) {
 	return f.logs, nil
+}
+
+func (f *fakeIntentRouter) Route(_ context.Context, message string, _ Context, intents []string) (string, error) {
+	f.message = message
+	f.intents = intents
+	return f.intent, f.err
 }
 
 func TestServiceAskMatchesCrashLoops(t *testing.T) {
@@ -117,6 +130,67 @@ func TestServiceAskReturnsUnsupportedForUnknownQuestion(t *testing.T) {
 	}
 	if len(response.Suggestions) == 0 {
 		t.Fatal("expected fallback suggestions")
+	}
+}
+
+func TestServiceAskUsesLLMRouterForUnknownReadOnlyQuestion(t *testing.T) {
+	router := &fakeIntentRouter{intent: "pod_crashloops"}
+	service := NewService(fakeQuerier{
+		results: map[string]json.RawMessage{
+			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason="CrashLoopBackOff"})`: vectorPayload(
+				sample(map[string]string{"pod": "broken-api-5d8c"}, "1"),
+			),
+		},
+	}, "monitoring-tool").WithIntentRouter(router)
+
+	response, err := service.Ask(context.Background(), "is anything repeatedly dying?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if router.message != "is anything repeatedly dying?" {
+		t.Fatalf("router message = %q, want original message", router.message)
+	}
+	if !containsString(router.intents, "pod_crashloops") || !containsString(router.intents, IntentUnsupported) {
+		t.Fatalf("router intents = %#v, want approved intents", router.intents)
+	}
+	if response.Intent != "pod_crashloops" {
+		t.Fatalf("intent = %q, want pod_crashloops", response.Intent)
+	}
+	if response.Engine != "llm-routed" {
+		t.Fatalf("engine = %q, want llm-routed", response.Engine)
+	}
+}
+
+func TestServiceAskDoesNotRunUnsupportedLLMRoute(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithIntentRouter(&fakeIntentRouter{intent: IntentUnsupported})
+
+	response, err := service.Ask(context.Background(), "please restart the api")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != IntentUnsupported {
+		t.Fatalf("intent = %q, want unsupported", response.Intent)
+	}
+	if len(response.Queries) != 0 {
+		t.Fatalf("queries length = %d, want 0", len(response.Queries))
+	}
+}
+
+func TestServiceAskFallsBackWhenLLMRouterFails(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithIntentRouter(&fakeIntentRouter{err: fmt.Errorf("timeout")})
+
+	response, err := service.Ask(context.Background(), "is anything repeatedly dying?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != IntentUnsupported {
+		t.Fatalf("intent = %q, want unsupported", response.Intent)
+	}
+	if response.Engine != "llm-unavailable" {
+		t.Fatalf("engine = %q, want llm-unavailable", response.Engine)
 	}
 }
 

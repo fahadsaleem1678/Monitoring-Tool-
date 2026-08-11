@@ -54,6 +54,9 @@ func main() {
 	metricsHandler := httpapi.NewMetricsHandler(prom)
 	kubernetesMCP := kubernetesmcp.New(cfg.KubernetesMCPURL, cfg.PrometheusTimeout)
 	chatService := chat.NewService(prom, "monitoring-tool").WithKubernetes(chatKubernetesReader{kubernetesMCP}, cfg.MaxLogLines)
+	if cfg.AssistantLLMEnabled {
+		chatService.WithIntentRouter(chat.NewLLMIntentRouter(assistantLLMConfig(cfg)))
+	}
 	chatHandler := httpapi.NewChatHandler(chatService)
 	dashboardHandler := httpapi.NewDashboardHandler(appStore, prom)
 	liveManager := live.NewManager(prom, authService, logger)
@@ -131,6 +134,27 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("backend stopped")
+}
+
+func assistantLLMConfig(cfg config.Config) chat.LLMRouterConfig {
+	provider := cfg.LLMProvider
+	if provider == "openai" {
+		return chat.LLMRouterConfig{
+			Enabled:  true,
+			Provider: provider,
+			Model:    cfg.OpenAIModel,
+			BaseURL:  cfg.OpenAIBaseURL,
+			APIKey:   cfg.OpenAIAPIKey,
+			Timeout:  cfg.OpenAITimeout,
+		}
+	}
+	return chat.LLMRouterConfig{
+		Enabled:  true,
+		Provider: provider,
+		Model:    cfg.OllamaModel,
+		BaseURL:  cfg.OllamaURL,
+		Timeout:  cfg.OllamaTimeout,
+	}
 }
 
 type chatKubernetesReader struct {

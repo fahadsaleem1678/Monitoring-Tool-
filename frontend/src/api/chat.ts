@@ -10,6 +10,7 @@ export type ChatResponse = {
   answer: string;
   intent: string;
   confidence: "low" | "medium" | "high" | string;
+  engine?: string;
   facts: ChatFact[];
   queries: string[];
   suggestions: string[];

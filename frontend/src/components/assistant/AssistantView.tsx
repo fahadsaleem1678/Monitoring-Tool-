@@ -37,6 +37,16 @@ export function AssistantView({ token }: AssistantViewProps) {
       ? lastAssistant.response.suggestions
       : starterPrompts;
   }, [messages]);
+  const latestEngine = useMemo(() => {
+    const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant" && message.response);
+    if (lastAssistant?.response?.engine === "llm-routed") {
+      return "LLM routed";
+    }
+    if (lastAssistant?.response?.engine === "llm-unavailable") {
+      return "LLM unavailable";
+    }
+    return "Deterministic v1";
+  }, [messages]);
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -88,7 +98,7 @@ export function AssistantView({ token }: AssistantViewProps) {
           <h2>Cluster Assistant</h2>
           <p>Plain-language answers from approved read-only cluster checks.</p>
         </div>
-        <span>Deterministic v1</span>
+        <span>{latestEngine}</span>
       </header>
 
       <section className="assistant-transcript" aria-live="polite">
