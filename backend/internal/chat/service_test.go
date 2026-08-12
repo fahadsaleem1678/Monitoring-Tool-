@@ -13,10 +13,11 @@ type fakeQuerier struct {
 }
 
 type fakeKubernetes struct {
-	pods    []Pod
-	podsErr error
-	events  []Event
-	logs    Logs
+	namespaces []Namespace
+	pods       []Pod
+	podsErr    error
+	events     []Event
+	logs       Logs
 }
 
 type fakeIntentRouter struct {
@@ -32,6 +33,10 @@ func (f fakeQuerier) InstantQuery(_ context.Context, query string) (json.RawMess
 		return nil, fmt.Errorf("unexpected query %s", query)
 	}
 	return result, nil
+}
+
+func (f fakeKubernetes) Namespaces(_ context.Context) ([]Namespace, error) {
+	return f.namespaces, nil
 }
 
 func (f fakeKubernetes) Pods(_ context.Context, _ string) ([]Pod, error) {
@@ -306,6 +311,36 @@ func TestServiceAskListsAllPodNames(t *testing.T) {
 	}
 	if !strings.Contains(response.Answer, "healthy-api-6c7d") {
 		t.Fatalf("answer %q did not include pod name", response.Answer)
+	}
+}
+
+func TestServiceAskListsNamespaces(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithKubernetes(fakeKubernetes{
+		namespaces: []Namespace{
+			{Name: "default", Phase: "Active"},
+			{Name: "monitoring-tool", Phase: "Active"},
+			{Name: "kube-system", Phase: "Active"},
+		},
+	}, 80)
+
+	response, err := service.Ask(context.Background(), "tell me all the namespaces in my cluster")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != "namespaces" {
+		t.Fatalf("intent = %q, want namespaces", response.Intent)
+	}
+	for _, expected := range []string{"default", "monitoring-tool", "kube-system"} {
+		if !strings.Contains(response.Answer, expected) {
+			t.Fatalf("answer %q did not include namespace %q", response.Answer, expected)
+		}
+		if !hasFact(response.Facts, "Namespace", expected) {
+			t.Fatalf("facts = %#v, want namespace fact %q", response.Facts, expected)
+		}
+	}
+	if len(response.Queries) != 1 || response.Queries[0] != "kubernetes.namespaces" {
+		t.Fatalf("queries = %#v, want kubernetes.namespaces", response.Queries)
 	}
 }
 

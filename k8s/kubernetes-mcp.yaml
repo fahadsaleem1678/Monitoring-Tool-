@@ -10,7 +10,7 @@ metadata:
   name: monitoring-tool-kubernetes-mcp-readonly
 rules:
   - apiGroups: [""]
-    resources: ["pods", "events", "nodes"]
+    resources: ["pods", "events", "nodes", "namespaces"]
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["pods/log"]

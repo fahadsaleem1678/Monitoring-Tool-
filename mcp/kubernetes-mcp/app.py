@@ -31,6 +31,24 @@ async def kubernetes_pods(payload: dict):
     }
 
 
+@app.post("/tools/kubernetes.namespaces")
+async def kubernetes_namespaces(payload: dict):
+    body = await kubernetes_get("/api/v1/namespaces")
+    items = body.get("items", [])
+    namespaces = [
+        {
+            "name": item.get("metadata", {}).get("name", ""),
+            "phase": item.get("status", {}).get("phase", ""),
+        }
+        for item in items[:100]
+    ]
+    return {
+        "tool": "kubernetes.namespaces",
+        "summary": f"Kubernetes returned {len(items)} namespace(s)",
+        "data": {"namespaces": namespaces},
+    }
+
+
 @app.post("/tools/kubernetes.events")
 async def kubernetes_events(payload: dict):
     namespace = str(payload.get("namespace", "")).strip()

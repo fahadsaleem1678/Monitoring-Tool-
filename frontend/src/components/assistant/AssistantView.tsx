@@ -15,9 +15,9 @@ type AssistantViewProps = {
 
 const starterPrompts = [
   "Are my pods healthy?",
+  "List namespaces",
   "Any crash loops?",
-  "Which pods are restarting?",
-  "Are nodes ready?"
+  "Which pods are restarting?"
 ];
 
 export function AssistantView({ token }: AssistantViewProps) {
@@ -25,7 +25,7 @@ export function AssistantView({ token }: AssistantViewProps) {
     {
       id: "welcome",
       role: "assistant",
-      text: "Ask me about pod health, crash loops, restarts, image pulls, pending pods, nodes, or scrape targets."
+      text: "Ask me about namespaces, pod health, crash loops, restarts, image pulls, pending pods, nodes, or scrape targets."
     }
   ]);
   const [draft, setDraft] = useState("");
@@ -129,7 +129,7 @@ export function AssistantView({ token }: AssistantViewProps) {
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Ask about pods, nodes, restarts, image pulls, or scrape targets"
+          placeholder="Ask about namespaces, pods, nodes, restarts, image pulls, or scrape targets"
           maxLength={500}
           disabled={loading}
         />

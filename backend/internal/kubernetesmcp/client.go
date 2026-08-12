@@ -23,6 +23,11 @@ type Pod struct {
 	WaitingReasons []string `json:"waiting_reasons"`
 }
 
+type Namespace struct {
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+}
+
 type Event struct {
 	Namespace     string `json:"namespace"`
 	Name          string `json:"name"`
@@ -60,6 +65,18 @@ func (c *Client) Pods(ctx context.Context, namespace string) ([]Pod, error) {
 		return nil, err
 	}
 	return response.Data.Pods, nil
+}
+
+func (c *Client) Namespaces(ctx context.Context) ([]Namespace, error) {
+	var response struct {
+		Data struct {
+			Namespaces []Namespace `json:"namespaces"`
+		} `json:"data"`
+	}
+	if err := c.postTool(ctx, "kubernetes.namespaces", map[string]any{}, &response); err != nil {
+		return nil, err
+	}
+	return response.Data.Namespaces, nil
 }
 
 func (c *Client) Events(ctx context.Context, namespace string) ([]Event, error) {

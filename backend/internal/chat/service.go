@@ -22,6 +22,7 @@ type PrometheusQuerier interface {
 }
 
 type KubernetesReader interface {
+	Namespaces(ctx context.Context) ([]Namespace, error)
 	Pods(ctx context.Context, namespace string) ([]Pod, error)
 	Events(ctx context.Context, namespace string) ([]Event, error)
 	Logs(ctx context.Context, namespace, pod string, tailLines int) (Logs, error)
@@ -45,6 +46,11 @@ type Pod struct {
 	Phase          string
 	RestartCount   int
 	WaitingReasons []string
+}
+
+type Namespace struct {
+	Name  string
+	Phase string
 }
 
 type Event struct {
@@ -130,6 +136,9 @@ func (s *Service) AskWithContext(ctx context.Context, message string, chatContex
 		if isPrioritySummaryQuestion(normalized) {
 			return s.answerPrioritySummary(ctx)
 		}
+		if isNamespaceListQuestion(normalized) {
+			return s.answerNamespaces(ctx)
+		}
 		if isAllPodListQuestion(normalized) {
 			return s.answerAllPods(ctx)
 		}
@@ -210,6 +219,9 @@ func (s *Service) answerRoutedIntent(ctx context.Context, intentID, message, nor
 	case "cluster_priority_summary":
 		response, err := s.answerPrioritySummary(ctx)
 		return response, true, err
+	case "namespaces":
+		response, err := s.answerNamespaces(ctx)
+		return response, true, err
 	case "all_pods":
 		response, err := s.answerAllPods(ctx)
 		return response, true, err
@@ -286,11 +298,11 @@ func intentByID(intentID string) *intentDefinition {
 }
 
 func routableIntentIDs() []string {
-	ids := make([]string, 0, len(intents)+5)
+	ids := make([]string, 0, len(intents)+6)
 	for _, intent := range intents {
 		ids = append(ids, intent.id)
 	}
-	return append(ids, "cluster_priority_summary", "all_pods", "unhealthy_pods", "pod_details", IntentUnsupported)
+	return append(ids, "cluster_priority_summary", "namespaces", "all_pods", "unhealthy_pods", "pod_details", IntentUnsupported)
 }
 
 func unsupportedResponse() Response {
@@ -436,6 +448,17 @@ func isPrioritySummaryQuestion(message string) bool {
 		strings.Contains(message, "cluster problems") ||
 		strings.Contains(message, "health report") ||
 		strings.Contains(message, "quick report")
+}
+
+func isNamespaceListQuestion(message string) bool {
+	hasNamespace := strings.Contains(message, "namespace") || strings.Contains(message, "namespaces")
+	hasListIntent := strings.Contains(message, "list") ||
+		strings.Contains(message, "show") ||
+		strings.Contains(message, "tell me") ||
+		strings.Contains(message, "what") ||
+		strings.Contains(message, "all") ||
+		strings.Contains(message, "names")
+	return hasNamespace && hasListIntent
 }
 
 func isUnhealthyPodListQuestion(message string) bool {
@@ -599,6 +622,64 @@ func metricIntentNeedsAttention(intent *intentDefinition, count int) bool {
 		return count == 0
 	}
 	return count > 0
+}
+
+func (s *Service) answerNamespaces(ctx context.Context) (Response, error) {
+	if s.kubernetes == nil {
+		return Response{
+			Answer:      "I can answer namespace questions, but Kubernetes namespace listing is not configured for this backend yet.",
+			Intent:      IntentUnsupported,
+			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
+			Facts:       []Fact{},
+			Queries:     []string{},
+			Suggestions: defaultSuggestions(),
+		}, nil
+	}
+
+	namespaces, err := s.kubernetes.Namespaces(ctx)
+	if err != nil {
+		return Response{
+			Answer:      "I could not list namespaces from Kubernetes MCP right now. Try again in a moment.",
+			Intent:      "namespaces",
+			Confidence:  ConfidenceLow,
+			Engine:      "deterministic",
+			Facts:       []Fact{{Label: "Namespaces", Value: "unavailable", Severity: "warning"}},
+			Queries:     []string{"kubernetes.namespaces"},
+			Suggestions: []string{"List all pods", "Are my pods healthy?", "Are nodes ready?"},
+		}, nil
+	}
+	if len(namespaces) == 0 {
+		return Response{
+			Answer:      "I did not find any namespaces in the cluster.",
+			Intent:      "namespaces",
+			Confidence:  ConfidenceHigh,
+			Engine:      "deterministic",
+			Facts:       []Fact{{Label: "Namespaces", Value: "0", Severity: "warning"}},
+			Queries:     []string{"kubernetes.namespaces"},
+			Suggestions: []string{"List all pods", "Are nodes ready?", "Any crash loops?"},
+		}, nil
+	}
+
+	names := make([]string, 0, len(namespaces))
+	facts := []Fact{{Label: "Namespaces", Value: fmt.Sprintf("%d", len(namespaces)), Severity: "healthy"}}
+	for _, namespace := range namespaces {
+		name := strings.TrimSpace(namespace.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+		facts = append(facts, Fact{Label: "Namespace", Value: name, Severity: namespaceSeverity(namespace)})
+	}
+	return Response{
+		Answer:      fmt.Sprintf("I found %d namespace(s): %s.", len(names), strings.Join(names, ", ")),
+		Intent:      "namespaces",
+		Confidence:  ConfidenceHigh,
+		Engine:      "deterministic",
+		Facts:       limitFacts(facts, 24),
+		Queries:     []string{"kubernetes.namespaces"},
+		Suggestions: []string{"List all pods", "Are my pods healthy?", "Are nodes ready?"},
+	}, nil
 }
 
 func (s *Service) answerAllPods(ctx context.Context) (Response, error) {
@@ -1007,6 +1088,13 @@ func firstPodNames(pods []Pod, limit int) []string {
 
 func severityForPod(pod Pod) string {
 	if pod.Phase != "Running" || len(pod.WaitingReasons) > 0 {
+		return "warning"
+	}
+	return "healthy"
+}
+
+func namespaceSeverity(namespace Namespace) string {
+	if namespace.Phase != "" && namespace.Phase != "Active" {
 		return "warning"
 	}
 	return "healthy"

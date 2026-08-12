@@ -161,6 +161,21 @@ type chatKubernetesReader struct {
 	client *kubernetesmcp.Client
 }
 
+func (r chatKubernetesReader) Namespaces(ctx context.Context) ([]chat.Namespace, error) {
+	namespaces, err := r.client.Namespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]chat.Namespace, 0, len(namespaces))
+	for _, namespace := range namespaces {
+		result = append(result, chat.Namespace{
+			Name:  namespace.Name,
+			Phase: namespace.Phase,
+		})
+	}
+	return result, nil
+}
+
 func (r chatKubernetesReader) Pods(ctx context.Context, namespace string) ([]chat.Pod, error) {
 	pods, err := r.client.Pods(ctx, namespace)
 	if err != nil {

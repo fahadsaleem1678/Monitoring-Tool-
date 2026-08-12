@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -59,11 +61,13 @@ func (r *LLMIntentRouter) Route(ctx context.Context, message string, chatContext
 		return "", fmt.Errorf("unsupported assistant llm provider %q", provider)
 	}
 	if err != nil {
+		slog.Warn("assistant llm route failed", "provider", provider, "model", r.config.Model, "error", err)
 		return "", err
 	}
 
 	intent, err := parseRoutedIntent(content)
 	if err != nil {
+		slog.Warn("assistant llm route parse failed", "provider", provider, "model", r.config.Model, "error", err, "content", singleLinePreview(content, 180))
 		return "", err
 	}
 	if !allowedIntent(intent, intents) {
@@ -73,6 +77,15 @@ func (r *LLMIntentRouter) Route(ctx context.Context, message string, chatContext
 }
 
 func (r *LLMIntentRouter) openAIChat(ctx context.Context, messages []routerMessage) (string, error) {
+	content, err := r.openAIChatWithFormat(ctx, messages, true)
+	if err == nil {
+		return content, nil
+	}
+	slog.Warn("assistant llm route retrying without response_format", "model", r.config.Model, "error", err)
+	return r.openAIChatWithFormat(ctx, messages, false)
+}
+
+func (r *LLMIntentRouter) openAIChatWithFormat(ctx context.Context, messages []routerMessage, responseFormat bool) (string, error) {
 	if strings.TrimSpace(r.config.APIKey) == "" {
 		return "", fmt.Errorf("OPENAI_API_KEY is required when assistant LLM provider is openai")
 	}
@@ -81,10 +94,12 @@ func (r *LLMIntentRouter) openAIChat(ctx context.Context, messages []routerMessa
 		baseURL = "https://api.openai.com/v1"
 	}
 	payload := map[string]any{
-		"model":           r.config.Model,
-		"messages":        messages,
-		"temperature":     0,
-		"response_format": map[string]string{"type": "json_object"},
+		"model":       r.config.Model,
+		"messages":    messages,
+		"temperature": 0,
+	}
+	if responseFormat {
+		payload["response_format"] = map[string]string{"type": "json_object"}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -103,7 +118,8 @@ func (r *LLMIntentRouter) openAIChat(ctx context.Context, messages []routerMessa
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("assistant llm returned HTTP %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
+		return "", fmt.Errorf("assistant llm returned HTTP %d: %s", resp.StatusCode, singleLinePreview(string(body), 300))
 	}
 	var decoded struct {
 		Choices []struct {
