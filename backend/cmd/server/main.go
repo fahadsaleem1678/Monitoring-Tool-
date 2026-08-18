@@ -55,7 +55,8 @@ func main() {
 	kubernetesMCP := kubernetesmcp.New(cfg.KubernetesMCPURL, cfg.PrometheusTimeout)
 	chatService := chat.NewService(prom, "monitoring-tool").WithKubernetes(chatKubernetesReader{kubernetesMCP}, cfg.MaxLogLines)
 	if cfg.AssistantLLMEnabled {
-		chatService.WithIntentRouter(chat.NewLLMIntentRouter(assistantLLMConfig(cfg)))
+		assistantLLM := chat.NewLLMIntentRouter(assistantLLMConfig(cfg))
+		chatService.WithIntentRouter(assistantLLM).WithGeneralAnswerer(assistantLLM)
 	}
 	chatHandler := httpapi.NewChatHandler(chatService)
 	dashboardHandler := httpapi.NewDashboardHandler(appStore, prom)

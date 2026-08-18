@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { askClusterAssistant, type ChatContext, type ChatResponse } from "../../api/chat";
 
 type ChatMessage = {
@@ -17,19 +17,32 @@ const starterPrompts = [
   "Are my pods healthy?",
   "List namespaces",
   "Any crash loops?",
-  "Which pods are restarting?"
+  "Which pods are restarting?",
+  "Any image pull errors?",
+  "Any pending pods?",
+  "Are nodes ready?",
+  "How many pods are running?",
+  "Are Prometheus targets up?",
+  "What should I fix first?",
+  "Show unhealthy pods",
+  "List all pods"
 ];
 
 export function AssistantView({ token }: AssistantViewProps) {
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
       role: "assistant",
-      text: "Ask me about namespaces, pod health, crash loops, restarts, image pulls, pending pods, nodes, or scrape targets."
+      text: "Ask me about namespaces, pod health, crash loops, restarts, image pulls, pending pods, nodes, scrape targets, or priority issues."
     }
   ]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, loading]);
 
   const latestSuggestions = useMemo(() => {
     const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant" && message.response);
@@ -41,6 +54,12 @@ export function AssistantView({ token }: AssistantViewProps) {
     const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant" && message.response);
     if (lastAssistant?.response?.engine === "llm-routed") {
       return "LLM routed";
+    }
+    if (lastAssistant?.response?.engine === "deterministic+llm-router") {
+      return "LLM router ready";
+    }
+    if (lastAssistant?.response?.engine === "llm-general") {
+      return "LLM general";
     }
     if (lastAssistant?.response?.engine === "llm-unavailable") {
       return "LLM unavailable";
@@ -115,6 +134,7 @@ export function AssistantView({ token }: AssistantViewProps) {
             <p>Checking the cluster...</p>
           </article>
         )}
+        <div ref={transcriptEndRef} />
       </section>
 
       <section className="suggested-prompts" aria-label="Suggested questions">

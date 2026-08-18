@@ -50,10 +50,43 @@ const panels: PanelDefinition[] = [
   }
 ];
 
+type ViewId = "overview" | "assistant" | "dashboards" | "alerts" | "incidents";
+
+const viewLabels: Record<ViewId, { title: string; subtitle: string }> = {
+  overview: {
+    title: "Cluster Overview",
+    subtitle: "Live Prometheus signals, scrape health, and workload pressure at a glance."
+  },
+  assistant: {
+    title: "Cluster Assistant",
+    subtitle: "Ask read-only questions about pods, namespaces, nodes, alerts, and scrape targets."
+  },
+  dashboards: {
+    title: "Dashboards",
+    subtitle: "Saved PromQL panels and variable-driven views for repeated checks."
+  },
+  alerts: {
+    title: "Alerts",
+    subtitle: "Threshold rules, firing events, and Slack notification tests."
+  },
+  incidents: {
+    title: "Incident Reviews",
+    subtitle: "Human-reviewed AI drafts with evidence and audit history."
+  }
+};
+
+const navItems: Array<{ id: ViewId; label: string; meta: string; glyph: string }> = [
+  { id: "overview", label: "Overview", meta: "Live signals", glyph: "O" },
+  { id: "assistant", label: "Assistant", meta: "Read-only help", glyph: "A" },
+  { id: "alerts", label: "Alerts", meta: "Rules and events", glyph: "!" },
+  { id: "incidents", label: "Incidents", meta: "Review queue", glyph: "I" },
+  { id: "dashboards", label: "Dashboards", meta: "Saved panels", glyph: "D" }
+];
+
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(() => readStoredSession());
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [activeView, setActiveView] = useState<"overview" | "assistant" | "dashboards" | "alerts" | "incidents">("overview");
+  const [activeView, setActiveView] = useState<ViewId>("overview");
   const [health, setHealth] = useState<Loadable<BackendHealth>>({ status: "loading" });
   const [cards, setCards] = useState<Loadable<CardMetrics>>({ status: "loading" });
   const [panelData, setPanelData] = useState<Record<string, Loadable<PrometheusMatrixResult[]>>>(
@@ -111,7 +144,7 @@ export function App() {
   }
 
   if (!sessionChecked) {
-    return <main className="app-shell">Loading session...</main>;
+    return <main className="app-shell loading-shell">Loading session...</main>;
   }
 
   if (!session) {
@@ -120,86 +153,107 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className="topbar">
-        <div>
-          <p className="eyebrow">K3s cluster</p>
-          <h1>Monitoring Tool</h1>
+      <aside className="app-sidebar">
+        <div className="brand-block">
+          <span className="brand-mark">MT</span>
+          <div>
+            <p className="eyebrow">K3s cluster</p>
+            <h1>Monitoring Tool</h1>
+          </div>
         </div>
-        <div className="topbar-actions">
+
+        <nav className="app-tabs" aria-label="Main views">
+          {navItems.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className={activeView === item.id ? "active" : ""}
+              onClick={() => setActiveView(item.id)}
+            >
+              <span className="nav-glyph" aria-hidden="true">
+                {item.glyph}
+              </span>
+              <span>
+                <strong>{item.label}</strong>
+                <small>{item.meta}</small>
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <section className="sidebar-status" aria-label="Current session">
           <StatusBadge status={health.status === "ready" ? "healthy" : health.status} />
-          <span>{session.user.username} · {session.user.role}</span>
+          <div>
+            <strong>{session.user.username}</strong>
+            <span>{session.user.role}</span>
+          </div>
           <button type="button" onClick={handleLogout}>
             Logout
           </button>
-        </div>
+        </section>
+      </aside>
+
+      <section className="app-content">
+        {activeView !== "dashboards" && (
+          <header className="page-header">
+            <div>
+              <p className="eyebrow">Operations console</p>
+              <h2>{viewLabels[activeView].title}</h2>
+              <p>{viewLabels[activeView].subtitle}</p>
+            </div>
+            <span>Last refresh {lastUpdated}</span>
+          </header>
+        )}
+
+        {activeView === "overview" && (
+          <>
+            <section className="summary-strip">
+              {cards.status === "loading" && <MetricCard title="Cluster" value="Loading" detail="Fetching Prometheus" />}
+              {cards.status === "error" && <MetricCard title="Cluster" value="Error" detail={cards.message} state="error" />}
+              {cards.status === "ready" && (
+                <>
+                  <MetricCard title="Nodes Ready" value={cards.data.nodesReady} detail="kube-state-metrics" />
+                  <MetricCard title="Pods" value={cards.data.pods} detail="Known running pods" />
+                  <MetricCard title="Targets Up" value={cards.data.targetsUp} detail="Prometheus scrape health" />
+                </>
+              )}
+            </section>
+
+            <section className="dashboard-grid">
+              {panels.map((panel) => {
+                const state = panelData[panel.id] ?? { status: "loading" as const };
+                return (
+                  <Panel
+                    key={panel.id}
+                    title={panel.title}
+                    subtitle={panel.subtitle}
+                    status={state.status}
+                    error={state.status === "error" ? state.message : undefined}
+                    series={state.status === "ready" ? matrixToSeries(state.data, panel.transform) : []}
+                    unit={panel.unit}
+                  />
+                );
+              })}
+            </section>
+
+            <section className="workbench-band">
+              <header>
+                <div>
+                  <h2>PromQL Query</h2>
+                  <p>Instant query preview through the Go backend</p>
+                </div>
+                <span>Last refresh {lastUpdated}</span>
+              </header>
+              <QueryWorkbench />
+            </section>
+          </>
+        )}
+
+        {activeView === "assistant" && <AssistantView token={session.token} />}
+        {activeView === "dashboards" && <DashboardManager token={session.token} user={session.user} />}
+        {activeView === "alerts" && <AlertsView token={session.token} user={session.user} />}
+        {activeView === "incidents" && <IncidentReviewsView token={session.token} user={session.user} />}
       </section>
-
-      <nav className="app-tabs" aria-label="Main views">
-        <button type="button" className={activeView === "overview" ? "active" : ""} onClick={() => setActiveView("overview")}>
-          Overview
-        </button>
-        <button type="button" className={activeView === "assistant" ? "active" : ""} onClick={() => setActiveView("assistant")}>
-          Assistant
-        </button>
-        <button type="button" className={activeView === "dashboards" ? "active" : ""} onClick={() => setActiveView("dashboards")}>
-          Dashboards
-        </button>
-        <button type="button" className={activeView === "alerts" ? "active" : ""} onClick={() => setActiveView("alerts")}>
-          Alerts
-        </button>
-        <button type="button" className={activeView === "incidents" ? "active" : ""} onClick={() => setActiveView("incidents")}>
-          Incidents
-        </button>
-      </nav>
-
-      {activeView === "overview" && (
-        <>
-          <section className="summary-strip">
-            {cards.status === "loading" && <MetricCard title="Cluster" value="Loading" detail="Fetching Prometheus" />}
-            {cards.status === "error" && <MetricCard title="Cluster" value="Error" detail={cards.message} state="error" />}
-            {cards.status === "ready" && (
-              <>
-                <MetricCard title="Nodes Ready" value={cards.data.nodesReady} detail="kube-state-metrics" />
-                <MetricCard title="Pods" value={cards.data.pods} detail="Known running pods" />
-                <MetricCard title="Targets Up" value={cards.data.targetsUp} detail="Prometheus scrape health" />
-              </>
-            )}
-          </section>
-
-          <section className="dashboard-grid">
-            {panels.map((panel) => {
-              const state = panelData[panel.id] ?? { status: "loading" as const };
-              return (
-                <Panel
-                  key={panel.id}
-                  title={panel.title}
-                  subtitle={panel.subtitle}
-                  status={state.status}
-                  error={state.status === "error" ? state.message : undefined}
-                  series={state.status === "ready" ? matrixToSeries(state.data, panel.transform) : []}
-                  unit={panel.unit}
-                />
-              );
-            })}
-          </section>
-
-          <section className="workbench-band">
-            <header>
-              <div>
-                <h2>PromQL Query</h2>
-                <p>Instant query preview through the Go backend</p>
-              </div>
-              <span>Last refresh {lastUpdated}</span>
-            </header>
-            <QueryWorkbench />
-          </section>
-        </>
-      )}
-
-      {activeView === "assistant" && <AssistantView token={session.token} />}
-      {activeView === "dashboards" && <DashboardManager token={session.token} user={session.user} />}
-      {activeView === "alerts" && <AlertsView token={session.token} user={session.user} />}
-      {activeView === "incidents" && <IncidentReviewsView token={session.token} user={session.user} />}
     </main>
   );
 }

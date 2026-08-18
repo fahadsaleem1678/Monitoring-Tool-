@@ -103,4 +103,4 @@ function formatNumber(value: number, unit: string) {
   return value.toFixed(2);
 }
 
-const chartColors = ["#70d6ff", "#ffca5f", "#72d79b", "#f17d73", "#c9a7ff", "#f4a261"];
+const chartColors = ["#0a84ff", "#64d2ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff453a"];

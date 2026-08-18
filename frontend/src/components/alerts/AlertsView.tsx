@@ -39,6 +39,7 @@ export function AlertsView({ token, user }: AlertsViewProps) {
   const [message, setMessage] = useState("Monitoring Tool test alert from Phase 4.");
   const [action, setAction] = useState<Loadable<string> | null>(null);
   const isAdmin = user.role === "admin";
+  const recentEvents = events.status === "ready" ? events.data.slice(0, 5) : [];
 
   async function refresh() {
     await Promise.all([refreshRules(), refreshEvents()]);
@@ -150,19 +151,19 @@ export function AlertsView({ token, user }: AlertsViewProps) {
         <section className="workbench-band">
           <header>
             <div>
-              <h2>Recent Alert Events</h2>
-              <p>Notification and alert history stored in PostgreSQL</p>
+              <h2>Recent Alerts</h2>
+              <p>Latest 5 alert or notification events</p>
             </div>
             <button type="button" onClick={() => void refreshEvents()}>
               Refresh
             </button>
           </header>
-          {events.status === "loading" && <div className="panel-message">Loading events...</div>}
+          {events.status === "loading" && <div className="panel-message">Loading recent alerts...</div>}
           {events.status === "error" && <div className="panel-message error">{events.message}</div>}
-          {events.status === "ready" && events.data.length === 0 && <div className="panel-message">No alert events yet</div>}
+          {events.status === "ready" && recentEvents.length === 0 && <div className="panel-message">No recent alerts</div>}
           {events.status === "ready" && events.data.length > 0 && (
-            <div className="data-table">
-              {events.data.map((event) => (
+            <div className="data-table recent-alerts-list">
+              {recentEvents.map((event) => (
                 <div className="data-row event-row" key={event.id}>
                   <strong>{event.status}</strong>
                   <span>{event.message}</span>

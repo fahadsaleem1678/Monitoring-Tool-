@@ -36,6 +36,7 @@ export function IncidentReviewsView({ token, user }: Props) {
   const suggestedNextChecks = stringList(llmDetails.suggested_next_checks);
   const prometheusSteps = steps.filter((step) => step.step_type === "promql");
   const kubernetesSteps = steps.filter((step) => step.step_type === "kubernetes");
+  const recentIncidents = incidents.status === "ready" ? incidents.data.slice(0, 6) : [];
 
   async function refreshList(selectFirst = false) {
     setIncidents({ status: "loading" });
@@ -148,7 +149,7 @@ export function IncidentReviewsView({ token, user }: Props) {
         <header>
           <div>
             <h2>Incident Reviews</h2>
-            <p>AI drafts waiting for engineer review</p>
+            <p>Latest 6 AI drafts waiting for engineer review</p>
           </div>
           <button type="button" onClick={() => void refreshList()}>
             Refresh
@@ -157,11 +158,11 @@ export function IncidentReviewsView({ token, user }: Props) {
 
         {incidents.status === "loading" && <div className="panel-message compact">Loading incidents...</div>}
         {incidents.status === "error" && <div className="panel-message compact error">{incidents.message}</div>}
-        {incidents.status === "ready" && incidents.data.length === 0 && (
+        {incidents.status === "ready" && recentIncidents.length === 0 && (
           <div className="panel-message compact">No incident reviews yet</div>
         )}
         {incidents.status === "ready" &&
-          incidents.data.map((incident) => (
+          recentIncidents.map((incident) => (
             <button
               type="button"
               className="incident-list-item"

@@ -13,7 +13,7 @@ import (
 )
 
 type LLMRouterConfig struct {
-	Enabled bool
+	Enabled  bool
 	Provider string
 	Model    string
 	BaseURL  string
@@ -41,15 +41,12 @@ func (r *LLMIntentRouter) Route(ctx context.Context, message string, chatContext
 	if !r.config.Enabled {
 		return "", nil
 	}
-	provider := strings.ToLower(strings.TrimSpace(r.config.Provider))
-	if provider == "" {
-		return "", nil
-	}
-	if strings.TrimSpace(r.config.Model) == "" {
+	if !r.ready() {
 		return "", nil
 	}
 
 	messages := buildRouterMessages(message, chatContext, intents)
+	provider := strings.ToLower(strings.TrimSpace(r.config.Provider))
 	var content string
 	var err error
 	switch provider {
@@ -74,6 +71,39 @@ func (r *LLMIntentRouter) Route(ctx context.Context, message string, chatContext
 		return IntentUnsupported, nil
 	}
 	return intent, nil
+}
+
+func (r *LLMIntentRouter) AnswerGeneral(ctx context.Context, message string, chatContext Context) (string, error) {
+	if !r.config.Enabled || !r.ready() {
+		return "", fmt.Errorf("assistant llm is not configured")
+	}
+
+	messages := buildGeneralAnswerMessages(message, chatContext)
+	provider := strings.ToLower(strings.TrimSpace(r.config.Provider))
+	var content string
+	var err error
+	switch provider {
+	case "openai":
+		content, err = r.openAIChatWithFormat(ctx, messages, false)
+	case "ollama":
+		content, err = r.ollamaChatPlain(ctx, messages)
+	default:
+		return "", fmt.Errorf("unsupported assistant llm provider %q", provider)
+	}
+	if err != nil {
+		slog.Warn("assistant llm general answer failed", "provider", provider, "model", r.config.Model, "error", err)
+		return "", err
+	}
+
+	answer := strings.TrimSpace(content)
+	if answer == "" {
+		return "", fmt.Errorf("assistant llm returned empty general answer")
+	}
+	return singleLinePreview(answer, 900), nil
+}
+
+func (r *LLMIntentRouter) ready() bool {
+	return strings.TrimSpace(r.config.Provider) != "" && strings.TrimSpace(r.config.Model) != ""
 }
 
 func (r *LLMIntentRouter) openAIChat(ctx context.Context, messages []routerMessage) (string, error) {
@@ -138,6 +168,14 @@ func (r *LLMIntentRouter) openAIChatWithFormat(ctx context.Context, messages []r
 }
 
 func (r *LLMIntentRouter) ollamaChat(ctx context.Context, messages []routerMessage) (string, error) {
+	return r.ollamaChatWithFormat(ctx, messages, "json")
+}
+
+func (r *LLMIntentRouter) ollamaChatPlain(ctx context.Context, messages []routerMessage) (string, error) {
+	return r.ollamaChatWithFormat(ctx, messages, "")
+}
+
+func (r *LLMIntentRouter) ollamaChatWithFormat(ctx context.Context, messages []routerMessage, format string) (string, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(r.config.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://host.docker.internal:11434"
@@ -146,8 +184,10 @@ func (r *LLMIntentRouter) ollamaChat(ctx context.Context, messages []routerMessa
 		"model":    r.config.Model,
 		"messages": messages,
 		"stream":   false,
-		"format":   "json",
 		"options":  map[string]any{"temperature": 0, "num_predict": 80},
+	}
+	if format != "" {
+		payload["format"] = format
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -197,6 +237,27 @@ func buildRouterMessages(message string, chatContext Context, intents []string) 
 		"previous_intent":  chatContext.LastIntent,
 		"approved_intents": intents,
 		"json_shape":       map[string]string{"intent": "one approved intent id"},
+	}
+	userJSON, _ := json.Marshal(user)
+	return []routerMessage{
+		{Role: "system", Content: system},
+		{Role: "user", Content: string(userJSON)},
+	}
+}
+
+func buildGeneralAnswerMessages(message string, chatContext Context) []routerMessage {
+	system := strings.Join([]string{
+		"You are a concise Kubernetes and monitoring assistant.",
+		"Answer general conceptual questions only.",
+		"Do not claim to have checked the live cluster unless tool facts are provided.",
+		"Do not provide instructions that mutate infrastructure, secrets, credentials, or production state.",
+		"If the user asks for live cluster status, say they should ask a supported cluster check.",
+		"Keep the answer under 120 words.",
+	}, " ")
+	user := map[string]any{
+		"question":        message,
+		"previous_pods":   chatContext.Pods,
+		"previous_intent": chatContext.LastIntent,
 	}
 	userJSON, _ := json.Marshal(user)
 	return []routerMessage{

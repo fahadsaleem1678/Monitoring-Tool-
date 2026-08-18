@@ -27,6 +27,12 @@ type fakeIntentRouter struct {
 	intents []string
 }
 
+type fakeGeneralAnswerer struct {
+	answer  string
+	err     error
+	message string
+}
+
 func (f fakeQuerier) InstantQuery(_ context.Context, query string) (json.RawMessage, error) {
 	result, ok := f.results[query]
 	if !ok {
@@ -58,6 +64,11 @@ func (f *fakeIntentRouter) Route(_ context.Context, message string, _ Context, i
 	f.message = message
 	f.intents = intents
 	return f.intent, f.err
+}
+
+func (f *fakeGeneralAnswerer) AnswerGeneral(_ context.Context, message string, _ Context) (string, error) {
+	f.message = message
+	return f.answer, f.err
 }
 
 func TestServiceAskMatchesCrashLoops(t *testing.T) {
@@ -200,6 +211,65 @@ func TestServiceAskFallsBackWhenLLMRouterFails(t *testing.T) {
 	}
 	if response.Engine != "llm-unavailable" {
 		t.Fatalf("engine = %q, want llm-unavailable", response.Engine)
+	}
+}
+
+func TestServiceAskUsesLLMForGeneralQuestion(t *testing.T) {
+	answerer := &fakeGeneralAnswerer{answer: "A pod is the smallest deployable unit in Kubernetes."}
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithGeneralAnswerer(answerer)
+
+	response, err := service.Ask(context.Background(), "what is a pod?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if answerer.message != "what is a pod?" {
+		t.Fatalf("answerer message = %q, want original message", answerer.message)
+	}
+	if response.Intent != "general_question" {
+		t.Fatalf("intent = %q, want general_question", response.Intent)
+	}
+	if response.Engine != "llm-general" {
+		t.Fatalf("engine = %q, want llm-general", response.Engine)
+	}
+	if !strings.Contains(response.Answer, "smallest deployable unit") {
+		t.Fatalf("answer = %q, want LLM general answer", response.Answer)
+	}
+	if len(response.Queries) != 0 {
+		t.Fatalf("queries length = %d, want 0", len(response.Queries))
+	}
+}
+
+func TestServiceAskDoesNotAnswerGeneralQuestionWithoutLLM(t *testing.T) {
+	service := NewService(fakeQuerier{}, "monitoring-tool")
+
+	response, err := service.Ask(context.Background(), "what is a pod?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if response.Intent != IntentUnsupported {
+		t.Fatalf("intent = %q, want unsupported", response.Intent)
+	}
+	if response.Engine != "deterministic" {
+		t.Fatalf("engine = %q, want deterministic", response.Engine)
+	}
+}
+
+func TestServiceAskDoesNotUseGeneralLLMForMutationRequest(t *testing.T) {
+	answerer := &fakeGeneralAnswerer{answer: "I should not be called."}
+	service := NewService(fakeQuerier{}, "monitoring-tool").WithGeneralAnswerer(answerer)
+
+	response, err := service.Ask(context.Background(), "how do I delete a pod?")
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+
+	if answerer.message != "" {
+		t.Fatalf("answerer was called for mutation request: %q", answerer.message)
+	}
+	if response.Intent != IntentUnsupported {
+		t.Fatalf("intent = %q, want unsupported", response.Intent)
 	}
 }
 
@@ -455,8 +525,8 @@ func TestServiceAskPrioritySummaryFallsBackToPrometheus(t *testing.T) {
 				sample(map[string]string{"pod": "broken-api-5d8c"}, "1"),
 			),
 			`sum by (pod) (kube_pod_container_status_waiting_reason{namespace="monitoring-tool",reason=~"ImagePullBackOff|ErrImagePull"})`: vectorPayload(),
-			`sum by (pod) (kube_pod_status_phase{namespace="monitoring-tool",phase="Pending"})`: vectorPayload(),
-			`sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace="monitoring-tool"}[5m]))`: vectorPayload(),
+			`sum by (pod) (kube_pod_status_phase{namespace="monitoring-tool",phase="Pending"})`:                                            vectorPayload(),
+			`sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace="monitoring-tool"}[5m]))`:                           vectorPayload(),
 			`sum(kube_node_status_condition{condition="Ready",status="true"})`: vectorPayload(
 				sample(map[string]string{}, "1"),
 			),
